@@ -47,7 +47,6 @@ echo "Test output can be found in ${TEMPDIR}"
 
 export BINDIR=${TEMPDIR}/bin
 export DATADIR=${TEMPDIR}/data
-RUNNING_COUNT=0
 
 function reset_dirs() {
     rm -rf ${BINDIR}
@@ -82,11 +81,15 @@ cd "${SCRIPT_PATH}"
 
 ./timeout 200 ./e2e_basic_start_stop.sh
 
-python3 -m venv ${TEMPDIR}/ve
-. ${TEMPDIR}/ve/bin/activate
-${TEMPDIR}/ve/bin/pip3 install --upgrade pip
-${TEMPDIR}/ve/bin/pip3 install --upgrade py-algorand-sdk cryptography
-${TEMPDIR}/ve/bin/python3 e2e_client_runner.py e2e_subs/*.sh
+VENV=${TEMPDIR}/ve
+# VENV=~/.venv/integration-reuse # Consider uncommenting for speed in local dev
+if [ ! -d "$VENV" ]; then
+    python3 -m venv "$VENV"
+fi
+. "$VENV/bin/activate"
+pip3 install --upgrade pip
+pip3 install --upgrade py-algorand-sdk cryptography
+python3 e2e_client_runner.py "$SRCROOT"/test/scripts/e2e_subs/*.sh
 deactivate
 
 # Export our root temp folder as 'TESTDIR' for tests to use as their root test folder
