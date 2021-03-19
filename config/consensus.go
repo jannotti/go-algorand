@@ -231,6 +231,9 @@ type ConsensusParams struct {
 	// program in bytes
 	MaxAppProgramLen int
 
+	// maximum total length of approval and clear state programs in bytes
+	MaxAppTotalProgramLen int
+
 	// maximum number of accounts in the ApplicationCall Accounts field.
 	// this determines, in part, the maximum number of balance records
 	// accessed by a single transaction
@@ -245,6 +248,10 @@ type ConsensusParams struct {
 	// field. these are the only assets for which the asset parameters may
 	// be read in the transaction
 	MaxAppTxnForeignAssets int
+
+	// maximum number of "references" (accounts, asa, app) that
+	// can be read in a single app call.
+	MaxAppTxnReferences int
 
 	// maximum cost of application approval program or clear state program
 	MaxAppProgramCost int
@@ -801,6 +808,7 @@ func initConsensusProtocols() {
 	v24.MaxAppArgs = 16
 	v24.MaxAppTotalArgLen = 2048
 	v24.MaxAppProgramLen = 1024
+	v24.MaxAppTotalProgramLen = 2048
 	v24.MaxAppKeyLen = 64
 	v24.MaxAppBytesValueLen = 64
 
@@ -816,6 +824,10 @@ func initConsensusProtocols() {
 
 	// Can look up 2 assets to see asset parameters
 	v24.MaxAppTxnForeignAssets = 2
+
+	// Appears superfluous here, but allows increasing the
+	// individual components while maintaining components.
+	v24.MaxAppTxnReferences = 8
 
 	// 64 byte keys @ ~333 microAlgos/byte + delta
 	v24.SchemaMinBalancePerEntry = 25000
@@ -876,6 +888,17 @@ func initConsensusProtocols() {
 	// but not yet released in a production protocol version.
 	vFuture := v26
 	vFuture.ApprovedUpgrades = map[protocol.ConsensusVersion]uint64{}
+
+	// Aggregate app limits
+	vFuture.MaxAppProgramLen = 2048
+	vFuture.MaxAppTotalProgramLen = 2048
+
+	// Each individual limit raise by 2
+	vFuture.MaxAppTxnAccounts = 6
+	vFuture.MaxAppTxnForeignApps = 4
+	vFuture.MaxAppTxnForeignAssets = 4
+	// but the total number of references remains the smae
+	vFuture.MaxAppTxnReferences = 8
 
 	// FilterTimeout for period 0 should take a new optimized, configured value, need to revisit this later
 	vFuture.AgreementFilterTimeoutPeriod0 = 4 * time.Second
