@@ -900,6 +900,9 @@ func initConsensusProtocols() {
 	// but the total number of references remains the smae
 	vFuture.MaxAppTxnReferences = 8
 
+	// Large enough for ipfs urls
+	vFuture.MaxAssetURLBytes = 96
+
 	// FilterTimeout for period 0 should take a new optimized, configured value, need to revisit this later
 	vFuture.AgreementFilterTimeoutPeriod0 = 4 * time.Second
 
