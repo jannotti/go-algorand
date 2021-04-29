@@ -264,6 +264,9 @@ type ConsensusParams struct {
 	// local key/value store
 	MaxAppBytesValueLen int
 
+	// maximum sum of the lengths of the key and value of one app state entry
+	MaxAppSumKeyValueLens int
+
 	// maximum number of applications a single account can create and store
 	// AppParams for at once
 	MaxAppsCreated int
@@ -811,6 +814,7 @@ func initConsensusProtocols() {
 	v24.MaxAppTotalProgramLen = 2048
 	v24.MaxAppKeyLen = 64
 	v24.MaxAppBytesValueLen = 64
+	v24.MaxAppSumKeyValueLens = 128
 
 	// 0.1 Algos (Same min balance cost as an Asset)
 	v24.AppFlatParamsMinBalance = 100000
@@ -902,6 +906,9 @@ func initConsensusProtocols() {
 
 	// Large enough for ipfs urls
 	vFuture.MaxAssetURLBytes = 96
+
+	// Let the bytes value take more space. Key+Value is still limited to 128
+	vFuture.MaxAppBytesValueLen = 127
 
 	// FilterTimeout for period 0 should take a new optimized, configured value, need to revisit this later
 	vFuture.AgreementFilterTimeoutPeriod0 = 4 * time.Second
