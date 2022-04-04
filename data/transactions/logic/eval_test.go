@@ -5130,6 +5130,6 @@ func TestOpJSONRef(t *testing.T) {
 }
 
 func TestTypeComplaints(t *testing.T) {
-	t.Skip("Issue #3837")
+	testProg(t, "err; store 0", AssemblerMaxVersion)
 	testProg(t, "int 1; return; store 0", AssemblerMaxVersion)
 }

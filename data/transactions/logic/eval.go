@@ -428,7 +428,7 @@ func (r runMode) String() string {
 	return "Unknown"
 }
 
-func (ep EvalParams) log() logging.Logger {
+func (ep *EvalParams) log() logging.Logger {
 	if ep.logger != nil {
 		return ep.logger
 	}
@@ -466,7 +466,7 @@ type EvalContext struct {
 
 	// the index of the transaction being evaluated
 	groupIndex int
-	// the transaction being evaluated (initialized from GroupIndex + ep.TxnGroup)
+	// the transaction being evaluated (initialized from groupIndex + ep.TxnGroup)
 	txn *transactions.SignedTxnWithAD
 
 	// Txn.EvalDelta maintains a summary of changes as we go.  We used to

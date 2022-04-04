@@ -523,7 +523,7 @@ func testProg(t testing.TB, source string, ver uint64, expected ...Expect) *OpSt
 				var found *lineError
 				for _, err := range errors {
 					if err.Line == exp.l {
-						found = err
+						found = &err
 						break
 					}
 				}
