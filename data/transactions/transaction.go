@@ -745,7 +745,7 @@ func CheckContractVersions(approval []byte, clear []byte, previous basics.AppPar
 		if err != nil {
 			return err
 		}
-		if (pav >= ExtraProgramChecksVersion || proto.AllowV4InnerAppls) && av < pav {
+		if pav >= proto.InnerAppCallMinimumCalleeVersion && av < pav {
 			return fmt.Errorf("approval program version downgrade: %d < %d", av, pav)
 		}
 	}
@@ -754,7 +754,7 @@ func CheckContractVersions(approval []byte, clear []byte, previous basics.AppPar
 		if err != nil {
 			return err
 		}
-		if (pcv >= ExtraProgramChecksVersion || proto.AllowV4InnerAppls) && cv < pcv {
+		if pcv >= proto.InnerAppCallMinimumCalleeVersion && cv < pcv {
 			return fmt.Errorf("clearstate program version downgrade: %d < %d", cv, pcv)
 		}
 	}

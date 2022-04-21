@@ -301,9 +301,7 @@ type ConsensusParams struct {
 	// provide greater isolation for clear state programs
 	IsolateClearState bool
 
-	// should inner appl txns be allowed to call v4 (and v5) applications?
-	// this also disallows application downgrades
-	AllowV4InnerAppls bool
+	InnerAppCallMinimumCalleeVersion uint64
 
 	// maximum number of applications a single account can create and store
 	// AppParams for at once
@@ -1083,6 +1081,7 @@ func initConsensusProtocols() {
 	v31.LogicSigVersion = 6
 	v31.EnableInnerTransactionPooling = true
 	v31.IsolateClearState = true
+	v31.InnerAppCallMinimumCalleeVersion = 6
 
 	// stat proof key registration
 	v31.EnableStateProofKeyregCheck = true
@@ -1137,7 +1136,7 @@ func initConsensusProtocols() {
 	vFuture.CompactCertSecKQ = 128
 
 	vFuture.LogicSigVersion = 7
-	vFuture.AllowV4InnerAppls = true
+	vFuture.InnerAppCallMinimumCalleeVersion = 4
 
 	Consensus[protocol.ConsensusFuture] = vFuture
 }

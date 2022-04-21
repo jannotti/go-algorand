@@ -4524,8 +4524,8 @@ func opItxnSubmit(cx *EvalContext) error {
 					if err != nil {
 						return err
 					}
-					if v < 4 {
-						return fmt.Errorf("inner app call opt-in with CSP v%d < v4", v)
+					if v < cx.Proto.InnerAppCallMinimumCalleeVersion {
+						return fmt.Errorf("inner app call opt-in with CSP v%d < v%d", v, cx.Proto.InnerAppCallMinimumCalleeVersion)
 					}
 				}
 			}
@@ -4533,12 +4533,8 @@ func opItxnSubmit(cx *EvalContext) error {
 			if err != nil {
 				return err
 			}
-			allowableVersion := uint64(innerAppsEnabledVersion)
-			if cx.Proto.AllowV4InnerAppls {
-				allowableVersion = 4
-			}
-			if v < allowableVersion {
-				return fmt.Errorf("inner app call with version %d < %d", v, allowableVersion)
+			if v < cx.Proto.InnerAppCallMinimumCalleeVersion {
+				return fmt.Errorf("inner app call with version %d < %d", v, cx.Proto.InnerAppCallMinimumCalleeVersion)
 			}
 		}
 
