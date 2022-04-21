@@ -1288,6 +1288,29 @@ itxn Logs 0
 
 !=
 `, ep)
+
+	// Checks that itxn TxID sees the same ID that the txn itself saw
+	TestApp(t, `
+itxn_begin
+int appl;    itxn_field TypeEnum
+int 222;     itxn_field ApplicationID
+itxn_submit;
+itxn Logs 0
+itxn TxID
+==
+`, ep)
+
+	// Checks that gitxn 0 TxID sees the same ID that the txn itself saw
+	TestApp(t, `
+itxn_begin
+int appl;    itxn_field TypeEnum
+int 222;     itxn_field ApplicationID
+itxn_submit;
+itxn Logs 0
+gitxn 0 TxID
+==
+`, ep)
+
 }
 
 // TestInnerGroupIDs confirms that GroupIDs are unset on size one inner groups,

@@ -879,7 +879,7 @@ func makeInnerTxnImpl(txn *transactions.SignedTxnWithAD, groupIndexes []int, pre
 
 func txnFieldToArrayFieldDesc(txn *transactions.Transaction, groupIndex int, field logic.TxnField, length int) (desc []fieldDesc) {
 	for i := 0; i < length; i++ {
-		tv, err := logic.TxnFieldToTealValue(txn, groupIndex, field, uint64(i), false)
+		tv, err := logic.TxnFieldToTealValue(txn, groupIndex, field, uint64(i), nil)
 		if err != nil {
 			return []fieldDesc{}
 		}
