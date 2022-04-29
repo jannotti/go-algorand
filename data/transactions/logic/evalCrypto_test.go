@@ -39,8 +39,8 @@ import (
 
 func TestKeccak256(t *testing.T) {
 	partitiontest.PartitionTest(t)
-
 	t.Parallel()
+
 	/*
 		pip install sha3
 		import sha3
@@ -56,8 +56,8 @@ byte 0xc195eca25a6f4c82bfba0287082ddb0d602ae9230f9cf1f1a40b68f8e2c41567
 
 func TestSHA3_256(t *testing.T) {
 	partitiontest.PartitionTest(t)
-
 	t.Parallel()
+
 	/*
 		pip install hashlib
 		import hashlib
@@ -72,8 +72,8 @@ byte 0xd757297405c5c89f7ceca368ee76c2f1893ee24f654e60032e65fb53b01aae10
 
 func TestSHA512_256(t *testing.T) {
 	partitiontest.PartitionTest(t)
-
 	t.Parallel()
+
 	/*
 		pip cryptography
 		from cryptography.hazmat.backends import default_backend
@@ -93,8 +93,8 @@ byte 0x98D2C31612EA500279B6753E5F6E780CA63EBA8274049664DAD66A2565ED1D2A
 
 func TestEd25519verify(t *testing.T) {
 	partitiontest.PartitionTest(t)
-
 	t.Parallel()
+
 	var s crypto.Seed
 	crypto.RandBytes(s[:])
 	c := crypto.GenerateSignatureSecrets(s)
@@ -135,8 +135,8 @@ ed25519verify`, pkStr), v)
 
 func TestEd25519VerifyBare(t *testing.T) {
 	partitiontest.PartitionTest(t)
-
 	t.Parallel()
+
 	var s crypto.Seed
 	crypto.RandBytes(s[:])
 	c := crypto.GenerateSignatureSecrets(s)
@@ -481,6 +481,7 @@ ecdsa_verify Secp256r1`, hex.EncodeToString(r), hex.EncodeToString(s), hex.Encod
 // test compatibility with ethereum signatures
 func TestEcdsaEthAddress(t *testing.T) {
 	partitiontest.PartitionTest(t)
+	t.Parallel()
 
 	/*
 		pip install eth-keys pycryptodome
@@ -510,6 +511,7 @@ byte 0x5ce9454909639d2d17a3f753ce7d93fa0b9ab12e // addr
 
 func TestEcdsaCostVariation(t *testing.T) {
 	partitiontest.PartitionTest(t)
+	t.Parallel()
 
 	// Doesn't matter if the actual verify returns true or false. Just confirm the cost depends on curve.
 	source := `
