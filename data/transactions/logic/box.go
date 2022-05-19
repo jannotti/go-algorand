@@ -17,7 +17,6 @@
 package logic
 
 import (
-	"errors"
 	"fmt"
 )
 
@@ -74,7 +73,7 @@ func opBoxExtract(cx *EvalContext) error {
 
 	end := start + length
 	if start > uint64(len(box)) || end > uint64(len(box)) {
-		return errors.New("extract range beyond box")
+		return fmt.Errorf("extract range beyond box (len=%v)", len(box))
 	}
 
 	cx.stack[pprev].Bytes = []byte(box[start:end])
@@ -101,7 +100,7 @@ func opBoxReplace(cx *EvalContext) error {
 
 	end := start + uint64(len(replacement))
 	if start > uint64(len(box)) || end > uint64(len(box)) {
-		return errors.New("replace range beyond box")
+		return fmt.Errorf("replace range beyond box (len=%v)", len(box))
 	}
 	clone := []byte(box)
 	copy(clone[start:end], replacement)
