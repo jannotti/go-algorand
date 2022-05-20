@@ -2340,17 +2340,17 @@ type accountsSQLWriter struct {
 }
 
 func (w *accountsSQLWriter) close() {
-	stmts := []*sql.Stmt{
-		w.insertCreatableIdxStmt, w.deleteCreatableIdxStmt,
-		w.deleteByRowIDStmt, w.insertStmt, w.updateStmt,
-		w.deleteResourceStmt, w.insertResourceStmt, w.updateResourceStmt,
-		w.deleteKvPairStmt, w.upsertKvPairStmt,
+	stmts := []**sql.Stmt{
+		&w.insertCreatableIdxStmt, &w.deleteCreatableIdxStmt,
+		&w.deleteByRowIDStmt, &w.insertStmt, &w.updateStmt,
+		&w.deleteResourceStmt, &w.insertResourceStmt, &w.updateResourceStmt,
+		&w.deleteKvPairStmt, &w.upsertKvPairStmt,
 	}
 
 	for _, s := range stmts {
-		if s != nil {
-			_ = s.Close()
-			s = nil
+		if (*s) != nil {
+			_ = (*s).Close()
+			(*s) = nil
 		}
 	}
 }
