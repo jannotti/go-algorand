@@ -2340,45 +2340,18 @@ type accountsSQLWriter struct {
 }
 
 func (w *accountsSQLWriter) close() {
-	if w.deleteByRowIDStmt != nil {
-		w.deleteByRowIDStmt.Close()
-		w.deleteByRowIDStmt = nil
+	stmts := []*sql.Stmt{
+		w.insertCreatableIdxStmt, w.deleteCreatableIdxStmt,
+		w.deleteByRowIDStmt, w.insertStmt, w.updateStmt,
+		w.deleteResourceStmt, w.insertResourceStmt, w.updateResourceStmt,
+		w.deleteKvPairStmt, w.upsertKvPairStmt,
 	}
-	if w.insertStmt != nil {
-		w.insertStmt.Close()
-		w.insertStmt = nil
-	}
-	if w.updateStmt != nil {
-		w.updateStmt.Close()
-		w.updateStmt = nil
-	}
-	if w.deleteResourceStmt != nil {
-		w.deleteResourceStmt.Close()
-		w.deleteResourceStmt = nil
-	}
-	if w.insertResourceStmt != nil {
-		w.insertResourceStmt.Close()
-		w.insertResourceStmt = nil
-	}
-	if w.updateResourceStmt != nil {
-		w.updateResourceStmt.Close()
-		w.updateResourceStmt = nil
-	}
-	if w.deleteKvPairStmt != nil {
-		w.deleteKvPairStmt.Close()
-		w.deleteKvPairStmt = nil
-	}
-	if w.upsertKvPairStmt != nil {
-		w.upsertKvPairStmt.Close()
-		w.upsertKvPairStmt = nil
-	}
-	if w.insertCreatableIdxStmt != nil {
-		w.insertCreatableIdxStmt.Close()
-		w.insertCreatableIdxStmt = nil
-	}
-	if w.deleteCreatableIdxStmt != nil {
-		w.deleteCreatableIdxStmt.Close()
-		w.deleteCreatableIdxStmt = nil
+
+	for _, s := range stmts {
+		if s != nil {
+			_ = s.Close()
+			s = nil
+		}
 	}
 }
 
