@@ -2348,9 +2348,9 @@ func (w *accountsSQLWriter) close() {
 	}
 
 	for _, s := range stmts {
-		if (*s) != nil {
+		if *s != nil {
 			_ = (*s).Close()
-			(*s) = nil
+			*s = nil
 		}
 	}
 }
