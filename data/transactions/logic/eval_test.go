@@ -45,10 +45,12 @@ func makeTestProto() *config.ConsensusParams {
 	return makeTestProtoV(LogicVersion)
 }
 
+var testLogicBudget = 25_000 // In a var so that we can temporarily change it
+
 func makeTestProtoV(version uint64) *config.ConsensusParams {
 	return &config.ConsensusParams{
 		LogicSigVersion:   version,
-		LogicSigMaxCost:   20000,
+		LogicSigMaxCost:   uint64(testLogicBudget),
 		Application:       version >= appsEnabledVersion,
 		MaxAppProgramCost: 700,
 
@@ -2930,9 +2932,9 @@ func TestSlowLogic(t *testing.T) {
 	testAccepts(t, source, 1)
 
 	// in v1, each repeat costs 30
-	v1overspend := fragment + strings.Repeat(fragment+"&&; ", 20000/30)
+	v1overspend := fragment + strings.Repeat(fragment+"&&; ", testLogicBudget/30)
 	// in v2,v3 each repeat costs 134
-	v2overspend := fragment + strings.Repeat(fragment+"&&; ", 20000/134)
+	v2overspend := fragment + strings.Repeat(fragment+"&&; ", testLogicBudget/134)
 
 	// v1overspend fails (on v1)
 	ops := testProg(t, v1overspend, 1)
@@ -3635,12 +3637,17 @@ int 142791994204213819
 +
 `
 
-func evalLoop(b *testing.B, runs int, program []byte) {
+func evalLoop(b *testing.B, runs int, programs ...[]byte) {
+	program := programs[0]
+	final := programs[len(programs)-1]
 	b.Helper()
 	b.ResetTimer()
 	for i := 0; i < runs; i++ {
 		var txn transactions.SignedTxn
 		txn.Lsig.Logic = program
+		if i == runs-1 {
+			txn.Lsig.Logic = final
+		}
 		pass, err := EvalSignature(0, benchmarkEvalParams(txn))
 		if !pass {
 			// rerun to trace it.  tracing messes up timing too much
@@ -3672,11 +3679,18 @@ func benchmarkBasicProgram(b *testing.B, source string) {
 // the idea is that you can subtract that out from the reported speed
 func benchmarkOperation(b *testing.B, prefix string, operation string, suffix string) {
 	b.Helper()
-	runs := 1 + b.N/2000
+	runs := b.N / 2000
 	inst := strings.Count(operation, ";") + strings.Count(operation, "\n")
 	source := prefix + ";" + strings.Repeat(operation+"\n", 2000) + ";" + suffix
 	ops := testProg(b, source, AssemblerMaxVersion)
-	evalLoop(b, runs, ops.Program)
+	finalOps := ops
+
+	if b.N%2000 != 0 {
+		runs++
+		finalSource := prefix + ";" + strings.Repeat(operation+"\n", b.N%2000) + ";" + suffix
+		finalOps = testProg(b, finalSource, AssemblerMaxVersion)
+	}
+	evalLoop(b, runs, ops.Program, finalOps.Program)
 	b.ReportMetric(float64(inst), "extra/op")
 }
 
@@ -5294,7 +5308,7 @@ byte ""
 base64_decode URLEncoding
 pop
 global OpcodeBudget
-int ` + fmt.Sprintf("%d", 20_000-3-1) + ` // base64_decode cost = 1
+int ` + fmt.Sprintf("%d", testLogicBudget-3-1) + ` // base64_decode cost = 1
 ==
 `
 	testAccepts(t, source, fidoVersion)
@@ -5304,7 +5318,7 @@ byte "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 base64_decode URLEncoding
 pop
 global OpcodeBudget
-int ` + fmt.Sprintf("%d", 20_000-3-5) + ` // base64_decode cost = 5 (64 bytes -> 1 + 64/16)
+int ` + fmt.Sprintf("%d", testLogicBudget-3-5) + ` // base64_decode cost = 5 (64 bytes -> 1 + 64/16)
 ==
 `
 	testAccepts(t, source, fidoVersion)
@@ -5314,7 +5328,7 @@ byte "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234567"
 base64_decode URLEncoding
 pop
 global OpcodeBudget
-int ` + fmt.Sprintf("%d", 20_000-3-5) + ` // base64_decode cost = 5 (60 bytes -> 1 + ceil(60/16))
+int ` + fmt.Sprintf("%d", testLogicBudget-3-5) + ` // base64_decode cost = 5 (60 bytes -> 1 + ceil(60/16))
 ==
 `
 	testAccepts(t, source, fidoVersion)
@@ -5324,7 +5338,7 @@ byte "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_AA=="
 base64_decode URLEncoding
 pop
 global OpcodeBudget
-int ` + fmt.Sprintf("%d", 20_000-3-6) + ` // base64_decode cost = 6 (68 bytes -> 1 + ceil(68/16))
+int ` + fmt.Sprintf("%d", testLogicBudget-3-6) + ` // base64_decode cost = 6 (68 bytes -> 1 + ceil(68/16))
 ==
 `
 	testAccepts(t, source, fidoVersion)
