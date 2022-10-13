@@ -74,23 +74,20 @@ func TestBoxNewBad(t *testing.T) {
 
 	logic.TestApp(t, `byte "unknown"; int 1000; box_create`, ep, "invalid Box reference")
 
-	// Confirm name too long creation fails.
-	{
+	t.Run("Confirm name too long creation fails", func(t *testing.T) {
 		long := strings.Repeat("x", 65)
 		txn.Boxes = []transactions.BoxRef{{Name: []byte(long)}}
 		logic.TestApp(t, fmt.Sprintf(`byte "%s"; int 8; box_create`, long), ep, "name too long")
 		logic.TestApp(t, fmt.Sprintf(`byte "%s"; int 8; bzero; box_put`, long), ep, "name too long")
-	}
+	})
 
-	// Confirm empty name creation fails.
-	{
+	t.Run("Confirm empty name creation fails", func(t *testing.T) {
 		expectedProblem := "zero length"
 		logic.TestApp(t, `byte ""; int 100; box_create`, ep, expectedProblem)
 
 		txn.Boxes = []transactions.BoxRef{{Name: []byte("")}} // needed for box_put, not box_create because zero check comes first anyway
 		logic.TestApp(t, `byte ""; int 100; bzero; box_put`, ep, expectedProblem)
-	}
-
+	})
 }
 
 func TestBoxReadWrite(t *testing.T) {
