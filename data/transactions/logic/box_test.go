@@ -74,12 +74,23 @@ func TestBoxNewBad(t *testing.T) {
 
 	logic.TestApp(t, `byte "unknown"; int 1000; box_create`, ep, "invalid Box reference")
 
-	long := strings.Repeat("x", 65)
-	txn.Boxes = []transactions.BoxRef{{Name: []byte(long)}}
-	logic.TestApp(t, fmt.Sprintf(`byte "%s"; int 1000; box_create`, long), ep, "name too long")
+	// Confirm name too long creation fails.
+	{
+		long := strings.Repeat("x", 65)
+		txn.Boxes = []transactions.BoxRef{{Name: []byte(long)}}
+		logic.TestApp(t, fmt.Sprintf(`byte "%s"; int 8; box_create`, long), ep, "name too long")
+		logic.TestApp(t, fmt.Sprintf(`byte "%s"; int 8; bzero; box_put`, long), ep, "name too long")
+	}
 
-	txn.Boxes = []transactions.BoxRef{{Name: []byte("")}} // irrelevant, zero check comes first anyway
-	logic.TestApp(t, `byte ""; int 1000; box_create`, ep, "zero length")
+	// Confirm empty name creation fails.
+	{
+		expectedProblem := "zero length"
+		logic.TestApp(t, `byte ""; int 100; box_create`, ep, expectedProblem)
+
+		txn.Boxes = []transactions.BoxRef{{Name: []byte("")}} // needed for box_put, not box_create because zero check comes first anyway
+		logic.TestApp(t, `byte ""; int 100; bzero; box_put`, ep, expectedProblem)
+	}
+
 }
 
 func TestBoxReadWrite(t *testing.T) {
@@ -378,20 +389,31 @@ func TestWriteBudgetPut(t *testing.T) {
 
 	// Sample tx[0] has two box refs, so write budget is 2*100
 
-	// Test simple use of one box, less than, equal, or over budget
-	logic.TestApp(t, `byte "self"; int 150; box_create`, ep)
-	logic.TestApp(t, `byte "self"; int 150; bzero; box_put; int 1`, ep)
-	logic.TestApp(t, `byte "self"; int 149; bzero; byte "x"; concat; box_put; int 1`, ep)
-	// puts to same name, doesn't go over budget (although we don't optimize
-	// away puts with the same content, this test uses different contents just
-	// to be sure).
-	logic.TestApp(t, `byte "self"; int 150; bzero; box_put;
-	                  byte "self"; int 149; bzero; byte "x"; concat; box_put; int 1`, ep)
-	// puts to different names do
-	logic.TestApp(t, `byte "self"; int 150; bzero; box_put;
-	                  byte "other"; int 149; bzero; byte "x"; concat; box_put; int 1`, ep,
-		"write budget")
+	// Creating a box with box_put
+	{
+		// Size == budget allows creation.
+		logic.TestApp(t, `byte "self"; int 200; bzero; box_put
+                         byte "self"; box_del; assert; int 1`, ep)
 
+		// Size > budget does not allow creation.
+		logic.TestApp(t, `byte "self"; int 201; bzero; box_put; int 1`, ep, "write budget")
+	}
+
+	// Test simple use of one box, less than, equal, or over budget
+	{
+		logic.TestApp(t, `byte "self"; int 150; box_create`, ep)
+		logic.TestApp(t, `byte "self"; int 150; bzero; box_put; int 1`, ep)
+		logic.TestApp(t, `byte "self"; int 149; bzero; byte "x"; concat; box_put; int 1`, ep)
+		// puts to same name, doesn't go over budget (although we don't optimize
+		// away puts with the same content, this test uses different contents just
+		// to be sure).
+		logic.TestApp(t, `byte "self"; int 150; bzero; box_put;
+	                  byte "self"; int 149; bzero; byte "x"; concat; box_put; int 1`, ep)
+		// puts to different names do
+		logic.TestApp(t, `byte "self"; int 150; bzero; box_put;
+	                  byte "other"; int 149; bzero; byte "x"; concat; box_put; int 1`, ep,
+			"write budget")
+	}
 }
 
 // TestBoxRepeatedCreate ensures that app is not charged write budget for
@@ -481,13 +503,18 @@ func TestConveniences(t *testing.T) {
 	logic.TestApp(t, `byte "self"; box_get; assert; byte 0xAADDEE; ==`, ep)
 	ledger.DelBoxes(888, "self")
 
-	// box_get panics if the box is too big
-	ep.Proto.MaxBoxSize = 5000
-	ep.Proto.BytesPerBoxReference = 5000 // avoid write budget error
-	logic.TestApp(t, `byte "self"; int 4098; box_create; assert; // bigger than maxStringSize
+	// box_get and box_put panic if the box is too big
+	{
+		ep.Proto.MaxBoxSize = 5000
+		ep.Proto.BytesPerBoxReference = 5000 // avoid write budget error
+		logic.TestApp(t, `byte "self"; int 4098; box_create; assert; // bigger than maxStringSize
                       byte "self"; box_get; assert; len`, ep,
-		"box_get produced a too big")
+			"box_get produced a too big")
+		ledger.DelBoxes(888, "self")
 
+		ep.Proto.MaxBoxSize = 4000
+		logic.TestApp(t, `byte "self"; int 4001; bzero; box_put; int 1`, ep, "box size too large")
+	}
 }
 
 func TestBoxTotals(t *testing.T) {
