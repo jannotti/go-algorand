@@ -386,18 +386,16 @@ func TestWriteBudgetPut(t *testing.T) {
 
 	// Sample tx[0] has two box refs, so write budget is 2*100
 
-	// Creating a box with box_put
-	{
+	t.Run("Creating a box with box_put", func(t *testing.T) {
 		// Size == budget allows creation.
 		logic.TestApp(t, `byte "self"; int 200; bzero; box_put
                          byte "self"; box_del; assert; int 1`, ep)
 
 		// Size > budget does not allow creation.
 		logic.TestApp(t, `byte "self"; int 201; bzero; box_put; int 1`, ep, "write budget")
-	}
+	})
 
-	// Test simple use of one box, less than, equal, or over budget
-	{
+	t.Run("Test simple use of one box, less than, equal, or over budget", func(t *testing.T) {
 		logic.TestApp(t, `byte "self"; int 150; box_create`, ep)
 		logic.TestApp(t, `byte "self"; int 150; bzero; box_put; int 1`, ep)
 		logic.TestApp(t, `byte "self"; int 149; bzero; byte "x"; concat; box_put; int 1`, ep)
@@ -410,7 +408,7 @@ func TestWriteBudgetPut(t *testing.T) {
 		logic.TestApp(t, `byte "self"; int 150; bzero; box_put;
 	                  byte "other"; int 149; bzero; byte "x"; concat; box_put; int 1`, ep,
 			"write budget")
-	}
+	})
 }
 
 // TestBoxRepeatedCreate ensures that app is not charged write budget for
@@ -500,8 +498,7 @@ func TestConveniences(t *testing.T) {
 	logic.TestApp(t, `byte "self"; box_get; assert; byte 0xAADDEE; ==`, ep)
 	ledger.DelBoxes(888, "self")
 
-	// box_get and box_put panic if the box is too big
-	{
+	t.Run("box_get and box_put panic if the box is too big", func(t *testing.T) {
 		ep.Proto.MaxBoxSize = 5000
 		ep.Proto.BytesPerBoxReference = 5000 // avoid write budget error
 		logic.TestApp(t, `byte "self"; int 4098; box_create; assert; // bigger than maxStringSize
@@ -511,7 +508,7 @@ func TestConveniences(t *testing.T) {
 
 		ep.Proto.MaxBoxSize = 4000
 		logic.TestApp(t, `byte "self"; int 4001; bzero; box_put; int 1`, ep, "box size too large")
-	}
+	})
 }
 
 func TestBoxTotals(t *testing.T) {
