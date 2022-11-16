@@ -182,11 +182,11 @@ func (d *OpDetails) Cost(program []byte, pc int, stack []stackValue) int {
 }
 
 func detDefault() OpDetails {
-	return OpDetails{asmDefault, nil, nil, modeAny, linearCost{baseCost: 1}, 1, nil, false}
+	return OpDetails{asmDefault, nil, nil, modeAny, linearCost{baseCost: 1}, 1, nil, nil, nil, false}
 }
 
 func constants(asm asmFunc, checker checkFunc, name string, kind immKind) OpDetails {
-	return OpDetails{asm, checker, nil, modeAny, linearCost{baseCost: 1}, 0, []immediate{imm(name, kind)}, false}
+	return OpDetails{asm, checker, nil, modeAny, linearCost{baseCost: 1}, 0, []immediate{imm(name, kind)}, nil, nil, false}
 }
 
 func detBranch() OpDetails {
@@ -199,7 +199,7 @@ func detBranch() OpDetails {
 }
 
 func multiOp(dispatch byte, name string, rootVersion uint64, children ...OpSpec) OpSpec {
-	ret := OpSpec{Opcode: dispatch, Name: name, Version: rootVersion, OpDetails: opDefault()}
+	ret := OpSpec{Opcode: dispatch, Name: name, Version: rootVersion, OpDetails: detDefault()}
 	ret.childOps = children
 	return ret
 }
@@ -632,23 +632,38 @@ var OpSpecs = []OpSpec{
 	{0x9b, "bn256_pairing", opBn256Pairing, proto("bb:i"), pairingVersion, costly(8700)},
 
 	// Byteslice math.
+	{0xa0, "b+", opBytesPlus, proto("bb:b"), 4, costly(10)},
+	{0xa1, "b-", opBytesMinus, proto("bb:b"), 4, costly(10)},
+	{0xa2, "b/", opBytesDiv, proto("bb:b"), 4, costly(20)},
+	{0xa3, "b*", opBytesMul, proto("bb:b"), 4, costly(20)},
+	{0xa4, "b<", opBytesLt, proto("bb:i"), 4, detDefault()},
+	{0xa5, "b>", opBytesGt, proto("bb:i"), 4, detDefault()},
+	{0xa6, "b<=", opBytesLe, proto("bb:i"), 4, detDefault()},
+	{0xa7, "b>=", opBytesGe, proto("bb:i"), 4, detDefault()},
+	{0xa8, "b==", opBytesEq, proto("bb:i"), 4, detDefault()},
+	{0xa9, "b!=", opBytesNeq, proto("bb:i"), 4, detDefault()},
+	{0xaa, "b%", opBytesModulo, proto("bb:b"), 4, costly(20)},
+	{0xab, "b|", opBytesBitOr, proto("bb:b"), 4, costly(6)},
+	{0xac, "b&", opBytesBitAnd, proto("bb:b"), 4, costly(6)},
+	{0xad, "b^", opBytesBitXor, proto("bb:b"), 4, costly(6)},
+	{0xae, "b~", opBytesBitNot, proto("b:b"), 4, costly(4)},
+	{0xaf, "bzero", opBytesZero, proto("i:b"), 4, detDefault()},
 	multiOp(0xa0, "bmath", multiVersion, []OpSpec{
 		{0xa0, "b+", opBytesPlus, proto("bb:b"), multiVersion, costly(10)},
 		{0xa1, "b-", opBytesMinus, proto("bb:b"), multiVersion, costly(10)},
 		{0xa2, "b/", opBytesDiv, proto("bb:b"), multiVersion, costly(20)},
 		{0xa3, "b*", opBytesMul, proto("bb:b"), multiVersion, costly(20)},
-		{0xa4, "b<", opBytesLt, proto("bb:i"), multiVersion, opDefault()},
-		{0xa5, "b>", opBytesGt, proto("bb:i"), multiVersion, opDefault()},
-		{0xa6, "b<=", opBytesLe, proto("bb:i"), multiVersion, opDefault()},
-		{0xa7, "b>=", opBytesGe, proto("bb:i"), multiVersion, opDefault()},
-		{0xa8, "b==", opBytesEq, proto("bb:i"), multiVersion, opDefault()},
-		{0xa9, "b!=", opBytesNeq, proto("bb:i"), multiVersion, opDefault()},
+		{0xa4, "b<", opBytesLt, proto("bb:i"), multiVersion, detDefault()},
+		{0xa5, "b>", opBytesGt, proto("bb:i"), multiVersion, detDefault()},
+		{0xa6, "b<=", opBytesLe, proto("bb:i"), multiVersion, detDefault()},
+		{0xa7, "b>=", opBytesGe, proto("bb:i"), multiVersion, detDefault()},
+		{0xa8, "b==", opBytesEq, proto("bb:i"), multiVersion, detDefault()},
+		{0xa9, "b!=", opBytesNeq, proto("bb:i"), multiVersion, detDefault()},
 		{0xaa, "b%", opBytesModulo, proto("bb:b"), multiVersion, costly(20)},
 		{0xab, "b|", opBytesBitOr, proto("bb:b"), multiVersion, costly(6)},
 		{0xac, "b&", opBytesBitAnd, proto("bb:b"), multiVersion, costly(6)},
 		{0xad, "b^", opBytesBitXor, proto("bb:b"), multiVersion, costly(6)},
-		{0xae, "b~", opBytesBitNot, proto("b:b"), multiVersion, costly(4)},
-		{0xaf, "bzero", opBytesZero, proto("i:b"), multiVersion, opDefault()}}...,
+		{0xae, "b~", opBytesBitNot, proto("b:b"), multiVersion, costly(4)}}...,
 	),
 
 	// AVM "effects"
@@ -695,10 +710,7 @@ func (a sortByOpcode) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
 func (a sortByOpcode) Less(i, j int) bool {
 	first := GetFullCode(a[i])
 	second := GetFullCode(a[j])
-	if bytes.Compare(first, second) <= 0 {
-		return true
-	}
-	return false
+	return bytes.Compare(first, second) <= 0
 }
 
 // SpecsByName returns a slice of all OpSpecs throughout the versions with the given name and without repetition

@@ -17,11 +17,11 @@
 package logic
 
 import (
+	"testing"
+
 	"github.com/algorand/go-algorand/data/transactions"
 	"github.com/algorand/go-algorand/test/partitiontest"
 	"github.com/stretchr/testify/require"
-	"strings"
-	"testing"
 )
 
 const bmathCompiled = "800301234549a0a049a0a149a0a249a0a349a0a4a0af49a0a5a0af49a0a6a0af49a0a7a0af49a0a8a0af49a0a9a0af49a0aa49a0ab49a0ac49a0ada0ae"
@@ -70,7 +70,7 @@ func TestDeprecation(t *testing.T) {
 	t.Parallel()
 	var txn transactions.SignedTxn
 	txn.Lsig.Logic = []byte{byte(multiVersion), 0x80, 0x01, 0x01, 0x49, 0xa2}
-	ep := defaultEvalParamsWithVersion(&txn, multiVersion)
+	ep := defaultEvalParamsWithVersion(multiVersion, txn)
 	_, err := EvalSignature(0, ep)
 	require.ErrorContains(t, err, "deprecated opcode")
 }
@@ -80,10 +80,11 @@ func TestMultiBytes(t *testing.T) {
 	t.Parallel()
 	sources := []string{"pushbytes 0x01; pushbytes 0x02; b/"}
 	for _, source := range sources {
-		program := strings.ReplaceAll(source, ";", "\n")
-		ops, err := AssembleStringWithVersion(program, AssemblerMaxVersion)
+		ops, err := AssembleStringWithVersion(source, AssemblerMaxVersion)
 		if len(ops.Errors) > 0 || err != nil || ops == nil || ops.Program == nil {
-			t.Log(assemblyTrace(program, AssemblerMaxVersion))
+			ops, err := assembleWithTrace(source, AssemblerMaxVersion)
+			require.NoError(t, err)
+			t.Log(ops.Trace)
 		}
 		require.Empty(t, ops.Errors)
 		require.Equal(t, []byte{AssemblerMaxVersion, 0x80, 0x01, 0x01, 0x80, 0x01, 0x02, 0xa0, 0xa2}, ops.Program)

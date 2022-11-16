@@ -1796,11 +1796,32 @@
       ]
     },
     {
+      "Opcode": 0,
+      "Name": "",
+      "Size": 0,
+      "Doc": "",
+      "Groups": null
+    },
+    {
+      "Opcode": 0,
+      "Name": "",
+      "Size": 0,
+      "Doc": "",
+      "Groups": null
+    },
+    {
+      "Opcode": 0,
+      "Name": "",
+      "Size": 0,
+      "Doc": "",
+      "Groups": null
+    },
+    {
       "Opcode": 160,
       "Name": "b+",
       "Args": "BB",
       "Returns": "B",
-      "Size": 2,
+      "Size": 1,
       "Doc": "A plus B. A and B are interpreted as big-endian unsigned integers",
       "Groups": [
         "Byte Array Arithmetic"
@@ -1811,7 +1832,7 @@
       "Name": "b-",
       "Args": "BB",
       "Returns": "B",
-      "Size": 2,
+      "Size": 1,
       "Doc": "A minus B. A and B are interpreted as big-endian unsigned integers. Fail on underflow.",
       "Groups": [
         "Byte Array Arithmetic"
@@ -1822,7 +1843,7 @@
       "Name": "b/",
       "Args": "BB",
       "Returns": "B",
-      "Size": 2,
+      "Size": 1,
       "Doc": "A divided by B (truncated division). A and B are interpreted as big-endian unsigned integers. Fail if B is zero.",
       "Groups": [
         "Byte Array Arithmetic"
@@ -1833,7 +1854,7 @@
       "Name": "b*",
       "Args": "BB",
       "Returns": "B",
-      "Size": 2,
+      "Size": 1,
       "Doc": "A times B. A and B are interpreted as big-endian unsigned integers.",
       "Groups": [
         "Byte Array Arithmetic"
@@ -1844,7 +1865,7 @@
       "Name": "b\u003c",
       "Args": "BB",
       "Returns": "U",
-      "Size": 2,
+      "Size": 1,
       "Doc": "1 if A is less than B, else 0. A and B are interpreted as big-endian unsigned integers",
       "Groups": [
         "Byte Array Arithmetic"
@@ -1855,7 +1876,7 @@
       "Name": "b\u003e",
       "Args": "BB",
       "Returns": "U",
-      "Size": 2,
+      "Size": 1,
       "Doc": "1 if A is greater than B, else 0. A and B are interpreted as big-endian unsigned integers",
       "Groups": [
         "Byte Array Arithmetic"
@@ -1866,7 +1887,7 @@
       "Name": "b\u003c=",
       "Args": "BB",
       "Returns": "U",
-      "Size": 2,
+      "Size": 1,
       "Doc": "1 if A is less than or equal to B, else 0. A and B are interpreted as big-endian unsigned integers",
       "Groups": [
         "Byte Array Arithmetic"
@@ -1877,7 +1898,7 @@
       "Name": "b\u003e=",
       "Args": "BB",
       "Returns": "U",
-      "Size": 2,
+      "Size": 1,
       "Doc": "1 if A is greater than or equal to B, else 0. A and B are interpreted as big-endian unsigned integers",
       "Groups": [
         "Byte Array Arithmetic"
@@ -1888,7 +1909,7 @@
       "Name": "b==",
       "Args": "BB",
       "Returns": "U",
-      "Size": 2,
+      "Size": 1,
       "Doc": "1 if A is equal to B, else 0. A and B are interpreted as big-endian unsigned integers",
       "Groups": [
         "Byte Array Arithmetic"
@@ -1899,7 +1920,7 @@
       "Name": "b!=",
       "Args": "BB",
       "Returns": "U",
-      "Size": 2,
+      "Size": 1,
       "Doc": "0 if A is equal to B, else 1. A and B are interpreted as big-endian unsigned integers",
       "Groups": [
         "Byte Array Arithmetic"
@@ -1910,7 +1931,7 @@
       "Name": "b%",
       "Args": "BB",
       "Returns": "B",
-      "Size": 2,
+      "Size": 1,
       "Doc": "A modulo B. A and B are interpreted as big-endian unsigned integers. Fail if B is zero.",
       "Groups": [
         "Byte Array Arithmetic"
@@ -1921,7 +1942,7 @@
       "Name": "b|",
       "Args": "BB",
       "Returns": "B",
-      "Size": 2,
+      "Size": 1,
       "Doc": "A bitwise-or B. A and B are zero-left extended to the greater of their lengths",
       "Groups": [
         "Byte Array Logic"
@@ -1932,7 +1953,7 @@
       "Name": "b\u0026",
       "Args": "BB",
       "Returns": "B",
-      "Size": 2,
+      "Size": 1,
       "Doc": "A bitwise-and B. A and B are zero-left extended to the greater of their lengths",
       "Groups": [
         "Byte Array Logic"
@@ -1943,7 +1964,7 @@
       "Name": "b^",
       "Args": "BB",
       "Returns": "B",
-      "Size": 2,
+      "Size": 1,
       "Doc": "A bitwise-xor B. A and B are zero-left extended to the greater of their lengths",
       "Groups": [
         "Byte Array Logic"
@@ -1954,7 +1975,7 @@
       "Name": "b~",
       "Args": "B",
       "Returns": "B",
-      "Size": 2,
+      "Size": 1,
       "Doc": "A with all bits inverted",
       "Groups": [
         "Byte Array Logic"
@@ -1965,7 +1986,7 @@
       "Name": "bzero",
       "Args": "U",
       "Returns": "B",
-      "Size": 2,
+      "Size": 1,
       "Doc": "zero filled byte-array of length A",
       "Groups": [
         "Loading Values"

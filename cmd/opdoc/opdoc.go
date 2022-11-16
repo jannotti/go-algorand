@@ -214,11 +214,7 @@ func opToMarkdown(out io.Writer, specs []logic.OpSpec, groupDocWritten map[strin
 			if from == to {
 				costString += fmt.Sprintf("    - %s (v%d)\n", cost, to)
 			} else {
-				if cost.To < docVersion {
-					costString += fmt.Fprintf(out, "    - %s (v%d - v%d)\n", cost.Cost, cost.From, cost.To)
-				} else {
-					costString += fmt.Fprintf(out, "    - %s (since v%d)\n", cost.Cost, cost.From)
-				}
+				costString += fmt.Sprintf("    - %s (v%d - v%d)\n", cost, from, to)
 			}
 			cost = spec.OpDetails.DocCost(len(spec.Arg.Types))
 			from = spec.Version
@@ -260,7 +256,6 @@ func opToMarkdown(out io.Writer, specs []logic.OpSpec, groupDocWritten map[strin
 
 func opsToMarkdown(out io.Writer) (err error) {
 	out.Write([]byte("# Opcodes\n\nOps have a 'cost' of 1 unless otherwise specified.\n\n"))
-	opSpecs := logic.OpcodesByVersion(uint64(docVersion))
 	written := make(map[string]bool)
 	for _, name := range logic.OpNames {
 		specs := logic.SpecsByName(name)
@@ -359,7 +354,7 @@ func argEnums(name string) ([]string, string) {
 func buildLanguageSpec(opGroups map[string][]string) *LanguageSpec {
 	records := make([]OpRecord, len(logic.OpNames))
 	for i, name := range logic.OpNames {
-		spec := logic.OpsByName[logic.docVersion][name]
+		spec := logic.OpsByName[docVersion][name]
 		records[i].Opcode = spec.Opcode
 		records[i].Name = spec.Name
 		records[i].Args = typeString(spec.Arg.Types)
