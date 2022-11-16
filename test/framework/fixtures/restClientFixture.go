@@ -22,10 +22,17 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/algorand/go-algorand/data/basics"
+	"github.com/algorand/go-algorand/data/transactions"
+	"github.com/algorand/go-algorand/protocol"
+
 	"github.com/stretchr/testify/require"
 
 	"github.com/algorand/go-algorand/daemon/algod/api/client"
-	"github.com/algorand/go-algorand/daemon/algod/api/spec/v1"
+	v2 "github.com/algorand/go-algorand/daemon/algod/api/server/v2"
+	generatedV2 "github.com/algorand/go-algorand/daemon/algod/api/server/v2/generated"
+	v1 "github.com/algorand/go-algorand/daemon/algod/api/spec/v1"
+
 	"github.com/algorand/go-algorand/libgoal"
 	"github.com/algorand/go-algorand/nodecontrol"
 	"github.com/algorand/go-algorand/test/e2e-go/globals"
@@ -165,7 +172,7 @@ func (f *RestClientFixture) GetFirstAccount() (account string, err error) {
 }
 
 // GetRichestAccount returns the first account when calling GetWalletsSortedByBalance, which should be the richest account
-func (f *RestClientFixture) GetRichestAccount() (richest v1.Account, err error) {
+func (f *RestClientFixture) GetRichestAccount() (richest generatedV2.Account, err error) {
 	list, err := f.GetWalletsSortedByBalance()
 	if len(list) > 0 {
 		richest = list[0]
@@ -190,17 +197,17 @@ func (f *RestClientFixture) GetBalanceAndRound(account string) (balance uint64, 
 
 // GetWalletsSortedByBalance returns the Primary node's accounts sorted DESC by balance
 // the richest account will be at accounts[0]
-func (f *RestClientFixture) GetWalletsSortedByBalance() (accounts []v1.Account, err error) {
+func (f *RestClientFixture) GetWalletsSortedByBalance() (accounts []generatedV2.Account, err error) {
 	return f.getNodeWalletsSortedByBalance(f.LibGoalClient)
 }
 
 // GetNodeWalletsSortedByBalance returns the specified node's accounts sorted DESC by balance
 // the richest account will be at accounts[0]
-func (f *RestClientFixture) GetNodeWalletsSortedByBalance(nodeDataDir string) (accounts []v1.Account, err error) {
+func (f *RestClientFixture) GetNodeWalletsSortedByBalance(nodeDataDir string) (accounts []generatedV2.Account, err error) {
 	return f.getNodeWalletsSortedByBalance(f.GetLibGoalClientFromDataDir(nodeDataDir))
 }
 
-func (f *RestClientFixture) getNodeWalletsSortedByBalance(client libgoal.Client) (accounts []v1.Account, err error) {
+func (f *RestClientFixture) getNodeWalletsSortedByBalance(client libgoal.Client) (accounts []generatedV2.Account, err error) {
 	wh, err := client.GetUnencryptedWalletHandle()
 	if err != nil {
 		return nil, fmt.Errorf("unable to retrieve wallet handle : %v", err)
@@ -210,7 +217,7 @@ func (f *RestClientFixture) getNodeWalletsSortedByBalance(client libgoal.Client)
 		return nil, fmt.Errorf("unable to list wallet addresses : %v", err)
 	}
 	for _, addr := range addresses {
-		info, err := client.AccountInformation(addr)
+		info, err := client.AccountInformationV2(addr, true)
 		f.failOnError(err, "failed to get account info: %v")
 		accounts = append(accounts, info)
 	}
@@ -231,7 +238,7 @@ func (f *RestClientFixture) WaitForTxnConfirmation(roundTimeout uint64, accountA
 // WaitForConfirmedTxn waits until either the passed txid is confirmed
 // or until the passed roundTimeout passes
 // or until waiting for a round to pass times out
-func (f *RestClientFixture) WaitForConfirmedTxn(roundTimeout uint64, accountAddress, txid string) (txn v1.Transaction, err error) {
+func (f *RestClientFixture) WaitForConfirmedTxn(roundTimeout uint64, accountAddress, txid string) (txn v2.PreEncodedTxInfo, err error) {
 	client := f.AlgodClient
 	for {
 		// Get current round information
@@ -240,11 +247,17 @@ func (f *RestClientFixture) WaitForConfirmedTxn(roundTimeout uint64, accountAddr
 		curRound := curStatus.LastRound
 
 		// Check if we know about the transaction yet
-		txn, err = client.TransactionInformation(accountAddress, txid)
+		var resp []byte
+		resp, err = client.RawPendingTransactionInformationV2(txid)
 		if err == nil {
-			return
+			err = protocol.DecodeReflect(resp, &txn)
+			require.NoError(f.t, err)
 		}
 
+		// Check if transaction was confirmed
+		if txn.ConfirmedRound != nil && *txn.ConfirmedRound > 0 {
+			return
+		}
 		// Check if we should wait a round
 		if curRound > roundTimeout {
 			err = fmt.Errorf("failed to see confirmed transaction by round %v", roundTimeout)
@@ -265,15 +278,66 @@ func (f *RestClientFixture) WaitForAllTxnsToConfirm(roundTimeout uint64, txidsAn
 	for txid, addr := range txidsAndAddresses {
 		_, err := f.WaitForConfirmedTxn(roundTimeout, addr, txid)
 		if err != nil {
+			f.t.Logf("txn failed to confirm: ", addr, txid)
+			response, err := f.AlgodClient.GetRawPendingTransactions(0)
+			if err == nil {
+				// Parse pending transaction response
+				var pendingTxns struct {
+					TopTransactions   []transactions.SignedTxn
+					TotalTransactions uint64
+				}
+				err = protocol.DecodeReflect(response, &pendingTxns)
+				require.NoError(f.t, err)
+				pendingTxids := make([]string, 0, pendingTxns.TotalTransactions)
+				for _, txn := range pendingTxns.TopTransactions {
+					pendingTxids = append(pendingTxids, txn.Txn.ID().String())
+				}
+				f.t.Logf("pending txids: ", pendingTxids)
+			} else {
+				f.t.Logf("unable to log pending txns, ", err)
+			}
+			allTxids := make([]string, 0, len(txidsAndAddresses))
+			for txID := range txidsAndAddresses {
+				allTxids = append(allTxids, txID)
+			}
+			f.t.Logf("all txids: ", allTxids)
 			return false
 		}
 	}
 	return true
 }
 
+// WaitForAccountFunded waits until either the passed account gets non-empty balance
+// or until the passed roundTimeout passes
+// or until waiting for a round to pass times out
+func (f *RestClientFixture) WaitForAccountFunded(roundTimeout uint64, accountAddress string) (err error) {
+	client := f.AlgodClient
+	for {
+		// Get current round information
+		curStatus, statusErr := client.Status()
+		require.NoError(f.t, statusErr, "fixture should be able to get node status")
+		curRound := curStatus.LastRound
+
+		// Check if we know about the transaction yet
+		acct, acctErr := client.AccountInformationV2(accountAddress, false)
+		require.NoError(f.t, acctErr, "fixture should be able to get account info")
+		if acct.Amount > 0 {
+			return nil
+		}
+
+		// Check if we should wait a round
+		if curRound > roundTimeout {
+			return fmt.Errorf("failed to see confirmed transaction by round %v", roundTimeout)
+		}
+		// Wait a round
+		err = f.WaitForRoundWithTimeout(curRound + 1)
+		require.NoError(f.t, err, "fixture should be able to wait for one round to pass")
+	}
+}
+
 // SendMoneyAndWait uses the rest client to send money and WaitForTxnConfirmation to wait for the send to confirm
 // it adds some extra error checking as well
-func (f *RestClientFixture) SendMoneyAndWait(curRound, amountToSend, transactionFee uint64, fromAccount, toAccount string, closeToAccount string) (txn v1.Transaction) {
+func (f *RestClientFixture) SendMoneyAndWait(curRound, amountToSend, transactionFee uint64, fromAccount, toAccount string, closeToAccount string) (txn v2.PreEncodedTxInfo) {
 	client := f.LibGoalClient
 	wh, err := client.GetUnencryptedWalletHandle()
 	require.NoError(f.t, err, "client should be able to get unencrypted wallet handle")
@@ -282,9 +346,10 @@ func (f *RestClientFixture) SendMoneyAndWait(curRound, amountToSend, transaction
 }
 
 // SendMoneyAndWaitFromWallet is as above, but for a specific wallet
-func (f *RestClientFixture) SendMoneyAndWaitFromWallet(walletHandle, walletPassword []byte, curRound, amountToSend, transactionFee uint64, fromAccount, toAccount string, closeToAccount string) (txn v1.Transaction) {
+func (f *RestClientFixture) SendMoneyAndWaitFromWallet(walletHandle, walletPassword []byte, curRound, amountToSend, transactionFee uint64, fromAccount, toAccount string, closeToAccount string) (txn v2.PreEncodedTxInfo) {
 	client := f.LibGoalClient
-	fundingTx, err := client.SendPaymentFromWallet(walletHandle, walletPassword, fromAccount, toAccount, transactionFee, amountToSend, nil, closeToAccount, 0, 0)
+	// use one curRound - 1 in case other nodes are behind
+	fundingTx, err := client.SendPaymentFromWallet(walletHandle, walletPassword, fromAccount, toAccount, transactionFee, amountToSend, nil, closeToAccount, basics.Round(curRound).SubSaturate(1), 0)
 	require.NoError(f.t, err, "client should be able to send money from rich to poor account")
 	require.NotEmpty(f.t, fundingTx.ID().String(), "transaction ID should not be empty")
 	waitingDeadline := curRound + uint64(5)
@@ -298,9 +363,9 @@ func (f *RestClientFixture) SendMoneyAndWaitFromWallet(walletHandle, walletPassw
 func (f *RestClientFixture) VerifyBlockProposedRange(account string, fromRound, countDownNumRounds int) (blockWasProposed bool) {
 	c := f.LibGoalClient
 	for i := 0; i < countDownNumRounds; i++ {
-		block, err := c.Block(uint64(fromRound - i))
+		cert, err := c.EncodedBlockCert(uint64(fromRound - i))
 		require.NoError(f.t, err, "client failed to get block %d", fromRound-i)
-		if block.Proposer == account {
+		if cert.Certificate.Proposal.OriginalProposer.GetUserAddress() == account {
 			blockWasProposed = true
 			break
 		}

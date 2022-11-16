@@ -128,7 +128,7 @@ func buildSyntaxHighlight() *tmLanguage {
 	accumulated := make(map[string]bool)
 
 	for _, name := range logic.OpNames {
-		spec := logic.OpsByName[logic.LogicVersion][name]
+		spec := logic.OpsByName[docVersion][name]
 		for _, imm := range spec.OpDetails.Immediates {
 			if imm.Group != nil && !accumulated[imm.Group.Name] {
 				allNamedFields = append(allNamedFields, imm.Group.Names...)
@@ -170,6 +170,7 @@ func buildSyntaxHighlight() *tmLanguage {
 			},
 		},
 	}
+	var allAccess []string
 	var allArithmetics []string
 
 	var keys []string
@@ -193,11 +194,8 @@ func buildSyntaxHighlight() *tmLanguage {
 				Name:  "keyword.other.teal",
 				Match: fmt.Sprintf("^(%s)\\b", strings.Join(loading, "|")),
 			})
-		case "State Access":
-			keywords.Patterns = append(keywords.Patterns, pattern{
-				Name:  "keyword.other.unit.teal",
-				Match: fmt.Sprintf("^(%s)\\b", strings.Join(names, "|")),
-			})
+		case "State Access", "Box Access":
+			allAccess = append(allAccess, names...)
 		// For these, accumulate into allArithmetics,
 		// and only add to keyword.Patterns later, when all
 		// have been collected.
@@ -231,6 +229,10 @@ func buildSyntaxHighlight() *tmLanguage {
 			panic(fmt.Sprintf("Unknown ops group: %s", grp))
 		}
 	}
+	keywords.Patterns = append(keywords.Patterns, pattern{
+		Name:  "keyword.other.unit.teal",
+		Match: fmt.Sprintf("^(%s)\\b", strings.Join(allAccess, "|")),
+	})
 	keywords.Patterns = append(keywords.Patterns, pattern{
 		Name:  "keyword.operator.teal",
 		Match: fmt.Sprintf("^(%s)\\b", strings.Join(allArithmetics, "|")),

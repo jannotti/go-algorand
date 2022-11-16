@@ -5,14 +5,12 @@ run:
 linters:
   disable-all: true
   enable:
-    - staticcheck
-    - structcheck
-    - typecheck
-    - varcheck
     - deadcode
-    - gosimple
-    - unused
     - partitiontest
+    - structcheck
+    - varcheck
+    - unconvert
+    - unused
 
 
 linters-settings:
@@ -41,8 +39,6 @@ issues:
   exclude:
     # ignore govet false positive fixed in https://github.com/golang/go/issues/45043
     - "sigchanyzer: misuse of unbuffered os.Signal channel as argument to signal.Notify"
-    # ignore golint false positive fixed in https://github.com/golang/lint/pull/487
-    - "exported method (.*).Unwrap` should have comment or be unexported"
     # ignore issues about the way we use _struct fields to define encoding settings
     - "`_struct` is unused"
 
@@ -56,24 +52,19 @@ issues:
     # be more lenient with test code
     - path: _test\.go
       linters:
-        - staticcheck
-        - structcheck
-        - typecheck
-        - varcheck
         - deadcode
-        - gosimple
+        - structcheck
+        - varcheck
+        - unconvert
         - unused
     # Add all linters here -- Comment this block out for testing linters
     - path: test/linttest/lintissues\.go
       linters:
-        - staticcheck
-        - structcheck
-        - typecheck
-        - varcheck
         - deadcode
-        - gosimple
+        - structcheck
+        - varcheck
+        - unconvert
         - unused
-        - partitiontest
     - path: crypto/secp256k1/secp256_test\.go
       linters:
         - partitiontest

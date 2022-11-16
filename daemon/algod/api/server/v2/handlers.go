@@ -18,6 +18,7 @@ package v2
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -46,11 +47,18 @@ import (
 	"github.com/algorand/go-algorand/node"
 	"github.com/algorand/go-algorand/protocol"
 	"github.com/algorand/go-algorand/rpcs"
+	"github.com/algorand/go-algorand/stateproof"
 	"github.com/algorand/go-codec/codec"
 )
 
-const maxTealSourceBytes = 1e5
-const maxTealDryrunBytes = 1e5
+// max compiled teal program is currently 8k
+// but we allow for comments, spacing, and repeated consts
+// in the source teal, allow up to 200kb
+const maxTealSourceBytes = 200_000
+
+// With the ability to hold unlimited assets DryrunRequests can
+// become quite large, allow up to 1mb
+const maxTealDryrunBytes = 1_000_000
 
 // Handlers is an implementation to the V2 route handler interface defined by the generated code.
 type Handlers struct {
@@ -63,6 +71,8 @@ type Handlers struct {
 type LedgerForAPI interface {
 	LookupAccount(round basics.Round, addr basics.Address) (ledgercore.AccountData, basics.Round, basics.MicroAlgos, error)
 	LookupLatest(addr basics.Address) (basics.AccountData, basics.Round, basics.MicroAlgos, error)
+	LookupKv(round basics.Round, key string) ([]byte, error)
+	LookupKeysByPrefix(round basics.Round, keyPrefix string, maxKeyNum uint64) ([]string, error)
 	ConsensusParams(r basics.Round) (config.ConsensusParams, error)
 	Latest() basics.Round
 	LookupAsset(rnd basics.Round, addr basics.Address, aidx basics.AssetIndex) (ledgercore.AssetResource, error)
@@ -74,6 +84,7 @@ type LedgerForAPI interface {
 	GetCreator(cidx basics.CreatableIndex, ctype basics.CreatableType) (basics.Address, bool, error)
 	EncodedBlockCert(rnd basics.Round) (blk []byte, cert []byte, err error)
 	Block(rnd basics.Round) (blk bookkeeping.Block, err error)
+	AddressTxns(id basics.Address, r basics.Round) ([]transactions.SignedTxnWithAD, error)
 }
 
 // NodeInterface represents node fns used by the handlers.
@@ -116,7 +127,7 @@ func convertParticipationRecord(record account.ParticipationRecord) generated.Pa
 	}
 
 	if record.StateProof != nil {
-		tmp := record.StateProof[:]
+		tmp := record.StateProof.Commitment[:]
 		participationKey.Key.StateProofKey = &tmp
 	}
 
@@ -143,6 +154,54 @@ func convertParticipationRecord(record account.ParticipationRecord) generated.Pa
 	participationKey.LastStateProof = roundToPtrOrNil(record.LastStateProof)
 
 	return participationKey
+}
+
+// ErrNoStateProofForRound returned when a state proof transaction could not be found
+var ErrNoStateProofForRound = errors.New("no state proof can be found for that round")
+
+// ErrTimeout indicates a task took too long, and the server canceled it.
+var ErrTimeout = errors.New("timed out on request")
+
+// ErrShutdown represents the error for the string errServiceShuttingDown
+var ErrShutdown = errors.New(errServiceShuttingDown)
+
+// GetStateProofTransactionForRound searches for a state proof transaction that can be used to prove on the given round (i.e the round is within the
+// attestation period). the latestRound should be provided as an upper bound for the search
+func GetStateProofTransactionForRound(ctx context.Context, txnFetcher LedgerForAPI, round, latestRound basics.Round, stop <-chan struct{}) (transactions.Transaction, error) {
+	hdr, err := txnFetcher.BlockHdr(round)
+	if err != nil {
+		return transactions.Transaction{}, err
+	}
+
+	if config.Consensus[hdr.CurrentProtocol].StateProofInterval == 0 {
+		return transactions.Transaction{}, ErrNoStateProofForRound
+	}
+
+	for i := round + 1; i <= latestRound; i++ {
+		select {
+		case <-stop:
+			return transactions.Transaction{}, ErrShutdown
+		case <-ctx.Done():
+			return transactions.Transaction{}, ErrTimeout
+		default:
+		}
+
+		txns, err := txnFetcher.AddressTxns(transactions.StateProofSender, i)
+		if err != nil {
+			return transactions.Transaction{}, err
+		}
+		for _, txn := range txns {
+			if txn.Txn.Type != protocol.StateProofTx {
+				continue
+			}
+
+			if txn.Txn.StateProofTxnFields.Message.FirstAttestedRound <= uint64(round) &&
+				uint64(round) <= txn.Txn.StateProofTxnFields.Message.LastAttestedRound {
+				return txn.Txn, nil
+			}
+		}
+	}
+	return transactions.Transaction{}, ErrNoStateProofForRound
 }
 
 // GetParticipationKeys Return a list of participation keys
@@ -305,7 +364,7 @@ func (v2 *Handlers) AccountInformation(ctx echo.Context, address string, params 
 		}
 		totalResults := record.TotalAssets + record.TotalAssetParams + record.TotalAppLocalStates + record.TotalAppParams
 		if totalResults > maxResults {
-			v2.Log.Info("MaxAccountAPIResults limit %d exceeded, total results %d", maxResults, totalResults)
+			v2.Log.Infof("MaxAccountAPIResults limit %d exceeded, total results %d", maxResults, totalResults)
 			extraData := map[string]interface{}{
 				"max-results":           maxResults,
 				"total-assets-opted-in": record.TotalAssets,
@@ -410,6 +469,8 @@ func (v2 *Handlers) basicAccountInformation(ctx echo.Context, addr basics.Addres
 			NumUint:      record.TotalAppSchema.NumUint,
 		},
 		AppsTotalExtraPages: numOrNil(uint64(record.TotalExtraAppPages)),
+		TotalBoxes:          numOrNil(record.TotalBoxes),
+		TotalBoxBytes:       numOrNil(record.TotalBoxBytes),
 		MinBalance:          record.MinBalance(&consensus).Raw,
 	}
 	response := generated.AccountResponse(account)
@@ -538,7 +599,12 @@ func (v2 *Handlers) GetBlock(ctx echo.Context, round uint64, params generated.Ge
 	if handle == protocol.CodecHandle {
 		blockbytes, err := rpcs.RawBlockBytes(v2.Node.LedgerForAPI(), basics.Round(round))
 		if err != nil {
-			return internalError(ctx, err, err.Error(), v2.Log)
+			switch err.(type) {
+			case ledgercore.ErrNoEntry:
+				return notFound(ctx, err, errFailedLookingUpLedger, v2.Log)
+			default:
+				return internalError(ctx, err, err.Error(), v2.Log)
+			}
 		}
 
 		ctx.Response().Writer.Header().Add("X-Algorand-Struct", "block-v1")
@@ -548,7 +614,12 @@ func (v2 *Handlers) GetBlock(ctx echo.Context, round uint64, params generated.Ge
 	ledger := v2.Node.LedgerForAPI()
 	block, _, err := ledger.BlockCert(basics.Round(round))
 	if err != nil {
-		return internalError(ctx, err, errFailedLookingUpLedger, v2.Log)
+		switch err.(type) {
+		case ledgercore.ErrNoEntry:
+			return notFound(ctx, err, errFailedLookingUpLedger, v2.Log)
+		default:
+			return internalError(ctx, err, errFailedLookingUpLedger, v2.Log)
+		}
 	}
 
 	// Encoding wasn't working well without embedding "real" objects.
@@ -566,13 +637,32 @@ func (v2 *Handlers) GetBlock(ctx echo.Context, round uint64, params generated.Ge
 	return ctx.Blob(http.StatusOK, contentType, data)
 }
 
-// GetProof generates a Merkle proof for a transaction in a block.
+// GetBlockHash gets the block hash for the given round.
+// (GET /v2/blocks/{round}/hash)
+func (v2 *Handlers) GetBlockHash(ctx echo.Context, round uint64) error {
+	ledger := v2.Node.LedgerForAPI()
+	block, _, err := ledger.BlockCert(basics.Round(round))
+	if err != nil {
+		switch err.(type) {
+		case ledgercore.ErrNoEntry:
+			return notFound(ctx, err, errFailedLookingUpLedger, v2.Log)
+		default:
+			return internalError(ctx, err, errFailedLookingUpLedger, v2.Log)
+		}
+	}
+
+	response := generated.BlockHashResponse{BlockHash: crypto.Digest(block.Hash()).String()}
+
+	return ctx.JSON(http.StatusOK, response)
+}
+
+// GetTransactionProof generates a Merkle proof for a transaction in a block.
 // (GET /v2/blocks/{round}/transactions/{txid}/proof)
-func (v2 *Handlers) GetProof(ctx echo.Context, round uint64, txid string, params generated.GetProofParams) error {
+func (v2 *Handlers) GetTransactionProof(ctx echo.Context, round uint64, txid string, params generated.GetTransactionProofParams) error {
 	var txID transactions.Txid
 	err := txID.UnmarshalText([]byte(txid))
 	if err != nil {
-		return badRequest(ctx, err, errNoTxnSpecified, v2.Log)
+		return badRequest(ctx, err, errNoValidTxnSpecified, v2.Log)
 	}
 
 	if params.Hashtype != nil && *params.Hashtype != "sha512_256" && *params.Hashtype != "sha256" {
@@ -633,7 +723,7 @@ func (v2 *Handlers) GetProof(ctx echo.Context, round uint64, txid string, params
 			return internalError(ctx, err, "generating proof", v2.Log)
 		}
 
-		response := generated.ProofResponse{
+		response := generated.TransactionProofResponse{
 			Proof:     proof.GetConcatenatedProof(),
 			Stibhash:  stibhash[:],
 			Idx:       uint64(idx),
@@ -880,7 +970,9 @@ func (v2 *Handlers) TransactionParams(ctx echo.Context) error {
 	return ctx.JSON(http.StatusOK, response)
 }
 
-type preEncodedTxInfo struct {
+// PreEncodedTxInfo represents the PendingTransaction response before it is
+// encoded to a format.
+type PreEncodedTxInfo struct {
 	AssetIndex         *uint64                        `codec:"asset-index,omitempty"`
 	AssetClosingAmount *uint64                        `codec:"asset-closing-amount,omitempty"`
 	ApplicationIndex   *uint64                        `codec:"application-index,omitempty"`
@@ -894,7 +986,7 @@ type preEncodedTxInfo struct {
 	SenderRewards      *uint64                        `codec:"sender-rewards,omitempty"`
 	Txn                transactions.SignedTxn         `codec:"txn"`
 	Logs               *[][]byte                      `codec:"logs,omitempty"`
-	Inners             *[]preEncodedTxInfo            `codec:"inner-txns,omitempty"`
+	Inners             *[]PreEncodedTxInfo            `codec:"inner-txns,omitempty"`
 }
 
 // PendingTransactionInformation returns a transaction with the specified txID
@@ -914,7 +1006,7 @@ func (v2 *Handlers) PendingTransactionInformation(ctx echo.Context, txid string,
 
 	txID := transactions.Txid{}
 	if err := txID.UnmarshalText([]byte(txid)); err != nil {
-		return badRequest(ctx, err, errNoTxnSpecified, v2.Log)
+		return badRequest(ctx, err, errNoValidTxnSpecified, v2.Log)
 	}
 
 	txn, ok := v2.Node.GetPendingTransaction(txID)
@@ -926,7 +1018,7 @@ func (v2 *Handlers) PendingTransactionInformation(ctx echo.Context, txid string,
 	}
 
 	// Encoding wasn't working well without embedding "real" objects.
-	response := preEncodedTxInfo{
+	response := PreEncodedTxInfo{
 		Txn: txn.Txn,
 	}
 
@@ -1112,6 +1204,97 @@ func (v2 *Handlers) GetApplicationByID(ctx echo.Context, applicationID uint64) e
 	return ctx.JSON(http.StatusOK, response)
 }
 
+func applicationBoxesMaxKeys(requestedMax uint64, algodMax uint64) uint64 {
+	if requestedMax == 0 {
+		if algodMax == 0 {
+			return math.MaxUint64 // unlimited results when both requested and algod max are 0
+		}
+		return algodMax + 1 // API limit dominates.  Increments by 1 to test if more than max supported results exist.
+	}
+
+	if requestedMax <= algodMax || algodMax == 0 {
+		return requestedMax // requested limit dominates
+	}
+
+	return algodMax + 1 // API limit dominates.  Increments by 1 to test if more than max supported results exist.
+}
+
+// GetApplicationBoxes returns the box names of an application
+// (GET /v2/applications/{application-id}/boxes)
+func (v2 *Handlers) GetApplicationBoxes(ctx echo.Context, applicationID uint64, params generated.GetApplicationBoxesParams) error {
+	appIdx := basics.AppIndex(applicationID)
+	ledger := v2.Node.LedgerForAPI()
+	lastRound := ledger.Latest()
+	keyPrefix := logic.MakeBoxKey(appIdx, "")
+
+	requestedMax, algodMax := nilToZero(params.Max), v2.Node.Config().MaxAPIBoxPerApplication
+	max := applicationBoxesMaxKeys(requestedMax, algodMax)
+
+	if max != math.MaxUint64 {
+		record, _, _, err := ledger.LookupAccount(ledger.Latest(), appIdx.Address())
+		if err != nil {
+			return internalError(ctx, err, errFailedLookingUpLedger, v2.Log)
+		}
+		if record.TotalBoxes > max {
+			return ctx.JSON(http.StatusBadRequest, generated.ErrorResponse{
+				Message: "Result limit exceeded",
+				Data: &map[string]interface{}{
+					"max-api-box-per-application": algodMax,
+					"max":                         requestedMax,
+					"total-boxes":                 record.TotalBoxes,
+				},
+			})
+		}
+	}
+
+	boxKeys, err := ledger.LookupKeysByPrefix(lastRound, keyPrefix, math.MaxUint64)
+	if err != nil {
+		return internalError(ctx, err, errFailedLookingUpLedger, v2.Log)
+	}
+
+	prefixLen := len(keyPrefix)
+	responseBoxes := make([]generated.BoxDescriptor, len(boxKeys))
+	for i, boxKey := range boxKeys {
+		responseBoxes[i] = generated.BoxDescriptor{
+			Name: []byte(boxKey[prefixLen:]),
+		}
+	}
+	response := generated.BoxesResponse{Boxes: responseBoxes}
+	return ctx.JSON(http.StatusOK, response)
+}
+
+// GetApplicationBoxByName returns the value of an application's box
+// (GET /v2/applications/{application-id}/box)
+func (v2 *Handlers) GetApplicationBoxByName(ctx echo.Context, applicationID uint64, params generated.GetApplicationBoxByNameParams) error {
+	appIdx := basics.AppIndex(applicationID)
+	ledger := v2.Node.LedgerForAPI()
+	lastRound := ledger.Latest()
+
+	encodedBoxName := params.Name
+	boxNameBytes, err := logic.NewAppCallBytes(encodedBoxName)
+	if err != nil {
+		return badRequest(ctx, err, err.Error(), v2.Log)
+	}
+	boxName, err := boxNameBytes.Raw()
+	if err != nil {
+		return badRequest(ctx, err, err.Error(), v2.Log)
+	}
+
+	value, err := ledger.LookupKv(lastRound, logic.MakeBoxKey(appIdx, string(boxName)))
+	if err != nil {
+		return internalError(ctx, err, errFailedLookingUpLedger, v2.Log)
+	}
+	if value == nil {
+		return notFound(ctx, errors.New(errBoxDoesNotExist), errBoxDoesNotExist, v2.Log)
+	}
+
+	response := generated.BoxResponse{
+		Name:  boxName,
+		Value: value,
+	}
+	return ctx.JSON(http.StatusOK, response)
+}
+
 // GetAssetByID returns application information by app idx.
 // (GET /v2/assets/{asset-id})
 func (v2 *Handlers) GetAssetByID(ctx echo.Context, assetID uint64) error {
@@ -1207,6 +1390,83 @@ func (v2 *Handlers) TealCompile(ctx echo.Context, params generated.TealCompilePa
 			Result: base64.StdEncoding.EncodeToString(ops.Program),
 		},
 		sourcemap,
+	}
+	return ctx.JSON(http.StatusOK, response)
+}
+
+// GetStateProof returns the state proof for a given round.
+// (GET /v2/stateproofs/{round})
+func (v2 *Handlers) GetStateProof(ctx echo.Context, round uint64) error {
+	ctxWithTimeout, cancel := context.WithTimeout(ctx.Request().Context(), time.Minute)
+	defer cancel()
+
+	ledger := v2.Node.LedgerForAPI()
+	if ledger.Latest() < basics.Round(round) {
+		return internalError(ctx, errors.New(errRoundGreaterThanTheLatest), errRoundGreaterThanTheLatest, v2.Log)
+	}
+
+	tx, err := GetStateProofTransactionForRound(ctxWithTimeout, ledger, basics.Round(round), ledger.Latest(), v2.Shutdown)
+	if err != nil {
+		return v2.wrapStateproofError(ctx, err)
+	}
+
+	response := generated.StateProofResponse{
+		StateProof: protocol.Encode(&tx.StateProof),
+	}
+
+	response.Message.BlockHeadersCommitment = tx.Message.BlockHeadersCommitment
+	response.Message.VotersCommitment = tx.Message.VotersCommitment
+	response.Message.LnProvenWeight = tx.Message.LnProvenWeight
+	response.Message.FirstAttestedRound = tx.Message.FirstAttestedRound
+	response.Message.LastAttestedRound = tx.Message.LastAttestedRound
+
+	return ctx.JSON(http.StatusOK, response)
+}
+
+func (v2 *Handlers) wrapStateproofError(ctx echo.Context, err error) error {
+	if errors.Is(err, ErrNoStateProofForRound) {
+		return notFound(ctx, err, err.Error(), v2.Log)
+	}
+	if errors.Is(err, ErrTimeout) {
+		return timeout(ctx, err, err.Error(), v2.Log)
+	}
+	return internalError(ctx, err, err.Error(), v2.Log)
+}
+
+// GetLightBlockHeaderProof Gets a proof of a light block header for a given round
+// (GET /v2/blocks/{round}/lightheader/proof)
+func (v2 *Handlers) GetLightBlockHeaderProof(ctx echo.Context, round uint64) error {
+	ctxWithTimeout, cancel := context.WithTimeout(ctx.Request().Context(), time.Minute)
+	defer cancel()
+	ledger := v2.Node.LedgerForAPI()
+	if ledger.Latest() < basics.Round(round) {
+		return internalError(ctx, errors.New(errRoundGreaterThanTheLatest), errRoundGreaterThanTheLatest, v2.Log)
+	}
+
+	stateProof, err := GetStateProofTransactionForRound(ctxWithTimeout, ledger, basics.Round(round), ledger.Latest(), v2.Shutdown)
+	if err != nil {
+		return v2.wrapStateproofError(ctx, err)
+	}
+
+	lastAttestedRound := stateProof.Message.LastAttestedRound
+	firstAttestedRound := stateProof.Message.FirstAttestedRound
+	stateProofInterval := lastAttestedRound - firstAttestedRound + 1
+
+	lightHeaders, err := stateproof.FetchLightHeaders(ledger, stateProofInterval, basics.Round(lastAttestedRound))
+	if err != nil {
+		return notFound(ctx, err, err.Error(), v2.Log)
+	}
+
+	blockIndex := round - firstAttestedRound
+	leafproof, err := stateproof.GenerateProofOfLightBlockHeaders(stateProofInterval, lightHeaders, blockIndex)
+	if err != nil {
+		return internalError(ctx, err, err.Error(), v2.Log)
+	}
+
+	response := generated.LightBlockHeaderProofResponse{
+		Index:     blockIndex,
+		Proof:     leafproof.GetConcatenatedProof(),
+		Treedepth: uint64(leafproof.TreeDepth),
 	}
 	return ctx.JSON(http.StatusOK, response)
 }

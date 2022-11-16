@@ -49,6 +49,10 @@ func serviceUnavailable(ctx echo.Context, internal error, external string, log l
 	return returnError(ctx, http.StatusServiceUnavailable, internal, external, log)
 }
 
+func timeout(ctx echo.Context, internal error, external string, log logging.Logger) error {
+	return returnError(ctx, http.StatusRequestTimeout, internal, external, log)
+}
+
 func internalError(ctx echo.Context, internal error, external string, log logging.Logger) error {
 	return returnError(ctx, http.StatusInternalServerError, internal, external, log)
 }
@@ -84,6 +88,13 @@ func byteOrNil(data []byte) *[]byte {
 		return nil
 	}
 	return &data
+}
+
+func nilToZero(numPtr *uint64) uint64 {
+	if numPtr == nil {
+		return 0
+	}
+	return *numPtr
 }
 
 func computeCreatableIndexInPayset(tx node.TxnWithStatus, txnCounter uint64, payset []transactions.SignedTxnWithAD) (cidx *uint64) {
@@ -297,20 +308,20 @@ func convertLogs(txn node.TxnWithStatus) *[][]byte {
 	return logItems
 }
 
-func convertInners(txn *node.TxnWithStatus) *[]preEncodedTxInfo {
-	inner := make([]preEncodedTxInfo, len(txn.ApplyData.EvalDelta.InnerTxns))
+func convertInners(txn *node.TxnWithStatus) *[]PreEncodedTxInfo {
+	inner := make([]PreEncodedTxInfo, len(txn.ApplyData.EvalDelta.InnerTxns))
 	for i, itxn := range txn.ApplyData.EvalDelta.InnerTxns {
 		inner[i] = convertInnerTxn(&itxn)
 	}
 	return &inner
 }
 
-func convertInnerTxn(txn *transactions.SignedTxnWithAD) preEncodedTxInfo {
+func convertInnerTxn(txn *transactions.SignedTxnWithAD) PreEncodedTxInfo {
 	// This copies from handlers.PendingTransactionInformation, with
 	// simplifications because we have a SignedTxnWithAD rather than
 	// TxnWithStatus, and we know this txn has committed.
 
-	response := preEncodedTxInfo{Txn: txn.SignedTxn}
+	response := PreEncodedTxInfo{Txn: txn.SignedTxn}
 
 	response.ClosingAmount = &txn.ApplyData.ClosingAmount.Raw
 	response.AssetClosingAmount = &txn.ApplyData.AssetClosingAmount

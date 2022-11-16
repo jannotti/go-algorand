@@ -19,7 +19,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"net/url"
 	"os"
 	"os/signal"
@@ -65,7 +64,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	options, err := ioutil.ReadFile(*componentOptions)
+	options, err := os.ReadFile(*componentOptions)
 	if err != nil {
 		log.Errorf("failed to read options file %s", *componentOptions)
 	}
@@ -130,7 +129,7 @@ func main() {
 func closeServiceConnection(serverWs *websocket.Conn) {
 	err := serverWs.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 	if err != nil {
-		log.Errorf("write close:", err)
+		log.Error("write close:", err)
 		return
 	}
 }

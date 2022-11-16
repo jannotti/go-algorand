@@ -20,7 +20,6 @@ import (
 	"bufio"
 	"encoding/base64"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"sort"
@@ -540,9 +539,7 @@ func printAccountInfo(client libgoal.Client, address string, onlyShowAssetIds bo
 	var createdAssets []generatedV2.Asset
 	if account.CreatedAssets != nil {
 		createdAssets = make([]generatedV2.Asset, len(*account.CreatedAssets))
-		for i, asset := range *account.CreatedAssets {
-			createdAssets[i] = asset
-		}
+		copy(createdAssets, *account.CreatedAssets)
 		sort.Slice(createdAssets, func(i, j int) bool {
 			return createdAssets[i].Index < createdAssets[j].Index
 		})
@@ -551,9 +548,7 @@ func printAccountInfo(client libgoal.Client, address string, onlyShowAssetIds bo
 	var heldAssets []generatedV2.AssetHolding
 	if account.Assets != nil {
 		heldAssets = make([]generatedV2.AssetHolding, len(*account.Assets))
-		for i, assetHolding := range *account.Assets {
-			heldAssets[i] = assetHolding
-		}
+		copy(heldAssets, *account.Assets)
 		sort.Slice(heldAssets, func(i, j int) bool {
 			return heldAssets[i].AssetId < heldAssets[j].AssetId
 		})
@@ -562,9 +557,7 @@ func printAccountInfo(client libgoal.Client, address string, onlyShowAssetIds bo
 	var createdApps []generatedV2.Application
 	if account.CreatedApps != nil {
 		createdApps = make([]generatedV2.Application, len(*account.CreatedApps))
-		for i, app := range *account.CreatedApps {
-			createdApps[i] = app
-		}
+		copy(createdApps, *account.CreatedApps)
 		sort.Slice(createdApps, func(i, j int) bool {
 			return createdApps[i].Id < createdApps[j].Id
 		})
@@ -573,9 +566,7 @@ func printAccountInfo(client libgoal.Client, address string, onlyShowAssetIds bo
 	var optedInApps []generatedV2.ApplicationLocalState
 	if account.AppsLocalState != nil {
 		optedInApps = make([]generatedV2.ApplicationLocalState, len(*account.AppsLocalState))
-		for i, appLocalState := range *account.AppsLocalState {
-			optedInApps[i] = appLocalState
-		}
+		copy(optedInApps, *account.AppsLocalState)
 		sort.Slice(optedInApps, func(i, j int) bool {
 			return optedInApps[i].Id < optedInApps[j].Id
 		})
@@ -600,7 +591,7 @@ func printAccountInfo(client libgoal.Client, address string, onlyShowAssetIds bo
 			_, units = unicodePrintable(*createdAsset.Params.UnitName)
 		}
 
-		total := assetDecimalsFmt(createdAsset.Params.Total, uint32(createdAsset.Params.Decimals))
+		total := assetDecimalsFmt(createdAsset.Params.Total, createdAsset.Params.Decimals)
 
 		url := ""
 		if createdAsset.Params.Url != nil {
@@ -627,7 +618,7 @@ func printAccountInfo(client libgoal.Client, address string, onlyShowAssetIds bo
 			fmt.Fprintf(report, "\tID %d, error\n", assetHolding.AssetId)
 		}
 
-		amount := assetDecimalsFmt(assetHolding.Amount, uint32(assetParams.Params.Decimals))
+		amount := assetDecimalsFmt(assetHolding.Amount, assetParams.Params.Decimals)
 
 		assetName := "<unnamed>"
 		if assetParams.Params.Name != nil {
@@ -819,7 +810,7 @@ var changeOnlineCmd = &cobra.Command{
 			}
 		}
 
-		firstTxRound, lastTxRound, err := client.ComputeValidityRounds(firstValid, lastValid, numValidRounds)
+		firstTxRound, lastTxRound, _, err := client.ComputeValidityRounds(firstValid, lastValid, numValidRounds)
 		if err != nil {
 			reportErrorf(err.Error())
 		}
@@ -1146,15 +1137,15 @@ var listParticipationKeysCmd = &cobra.Command{
 		fmt.Printf(rowFormat, "Registered", "Account", "ParticipationID", "Last Used", "First round", "Last round")
 		for _, part := range parts {
 			onlineInfoStr := "unknown"
-			onlineAccountInfo, err := client.AccountInformation(part.Address)
+			onlineAccountInfo, err := client.AccountInformationV2(part.Address, false)
 			if err == nil {
 				votingBytes := part.Key.VoteParticipationKey
 				vrfBytes := part.Key.SelectionParticipationKey
 				if onlineAccountInfo.Participation != nil &&
-					(string(onlineAccountInfo.Participation.ParticipationPK) == string(votingBytes[:])) &&
-					(string(onlineAccountInfo.Participation.VRFPK) == string(vrfBytes[:])) &&
-					(onlineAccountInfo.Participation.VoteFirst == part.Key.VoteFirstValid) &&
-					(onlineAccountInfo.Participation.VoteLast == part.Key.VoteLastValid) &&
+					(string(onlineAccountInfo.Participation.VoteParticipationKey) == string(votingBytes[:])) &&
+					(string(onlineAccountInfo.Participation.SelectionParticipationKey) == string(vrfBytes[:])) &&
+					(onlineAccountInfo.Participation.VoteFirstValid == part.Key.VoteFirstValid) &&
+					(onlineAccountInfo.Participation.VoteLastValid == part.Key.VoteLastValid) &&
 					(onlineAccountInfo.Participation.VoteKeyDilution == part.Key.VoteKeyDilution) {
 					onlineInfoStr = "yes"
 				} else {
@@ -1299,7 +1290,7 @@ var importRootKeysCmd = &cobra.Command{
 		}
 
 		keyDir := filepath.Join(dataDir, genID)
-		files, err := ioutil.ReadDir(keyDir)
+		files, err := os.ReadDir(keyDir)
 		if err != nil {
 			return
 		}
@@ -1430,7 +1421,7 @@ var markNonparticipatingCmd = &cobra.Command{
 
 		dataDir := ensureSingleDataDir()
 		client := ensureFullClient(dataDir)
-		firstTxRound, lastTxRound, err := client.ComputeValidityRounds(firstValid, lastValid, numValidRounds)
+		firstTxRound, lastTxRound, _, err := client.ComputeValidityRounds(firstValid, lastValid, numValidRounds)
 		if err != nil {
 			reportErrorf(errorConstructingTX, err)
 		}
@@ -1483,7 +1474,7 @@ func listParticipationKeyFiles(c *libgoal.Client) (partKeyFiles map[string]algod
 
 	// Get a list of files in the participation keys directory
 	keyDir := filepath.Join(c.DataDir(), genID)
-	files, err := ioutil.ReadDir(keyDir)
+	files, err := os.ReadDir(keyDir)
 	if err != nil {
 		return
 	}

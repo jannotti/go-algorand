@@ -23,7 +23,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"strings"
@@ -47,19 +46,10 @@ const (
 	maxRawResponseBytes = 50e6
 )
 
-// APIVersion is used to define which server side API version would be used when making http requests to the server
-type APIVersion string
-
-const (
-	// APIVersionV1 suggests that the RestClient would use v1 calls whenever it's available for the given request.
-	APIVersionV1 APIVersion = "v1"
-	// APIVersionV2 suggests that the RestClient would use v2 calls whenever it's available for the given request.
-	APIVersionV2 APIVersion = "v2"
-)
-
 // rawRequestPaths is a set of paths where the body should not be urlencoded
 var rawRequestPaths = map[string]bool{
-	"/v1/transactions":  true,
+	"/v1/transactions":  true, // Deprecated path
+	"/v2/transactions":  true,
 	"/v2/teal/dryrun":   true,
 	"/v2/teal/compile":  true,
 	"/v2/participation": true,
@@ -92,25 +82,16 @@ func (e HTTPError) Error() string {
 
 // RestClient manages the REST interface for a calling user.
 type RestClient struct {
-	serverURL       url.URL
-	apiToken        string
-	versionAffinity APIVersion
+	serverURL url.URL
+	apiToken  string
 }
 
 // MakeRestClient is the factory for constructing a RestClient for a given endpoint
 func MakeRestClient(url url.URL, apiToken string) RestClient {
 	return RestClient{
-		serverURL:       url,
-		apiToken:        apiToken,
-		versionAffinity: APIVersionV1,
+		serverURL: url,
+		apiToken:  apiToken,
 	}
-}
-
-// SetAPIVersionAffinity sets the client affinity to use a specific version of the API
-func (client *RestClient) SetAPIVersionAffinity(affinity APIVersion) (previousAffinity APIVersion) {
-	previousAffinity = client.versionAffinity
-	client.versionAffinity = affinity
-	return
 }
 
 // filterASCII filter out the non-ascii printable characters out of the given input string.
@@ -135,8 +116,34 @@ func extractError(resp *http.Response) error {
 		return nil
 	}
 
-	errorBuf, _ := ioutil.ReadAll(resp.Body) // ignore returned error
-	errorString := filterASCII(string(errorBuf))
+	errorBuf, _ := io.ReadAll(resp.Body) // ignore returned error
+	var errorJSON generatedV2.ErrorResponse
+	decodeErr := json.Unmarshal(errorBuf, &errorJSON)
+
+	var errorString string
+	if decodeErr == nil {
+		if errorJSON.Data == nil {
+			// There's no additional data, so let's just use the message
+			errorString = errorJSON.Message
+		} else {
+			// There's additional data, so let's re-encode the JSON response to show everything.
+			// We do this because the original response is likely encoded with escapeHTML=true, but
+			// since this isn't a webpage that extra encoding is not preferred.
+			var buffer strings.Builder
+			enc := json.NewEncoder(&buffer)
+			enc.SetEscapeHTML(false)
+			encErr := enc.Encode(errorJSON)
+			if encErr != nil {
+				// This really shouldn't happen, but if it does let's default to errorBuff
+				errorString = string(errorBuf)
+			} else {
+				errorString = buffer.String()
+			}
+		}
+	} else {
+		errorString = string(errorBuf)
+	}
+	errorString = filterASCII(errorString)
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		apiToken := resp.Request.Header.Get(authHeader)
@@ -152,6 +159,11 @@ func stripTransaction(tx string) string {
 		return strings.SplitAfter(tx, "-")[1]
 	}
 	return tx
+}
+
+// RawResponse is fulfilled by responses that should not be decoded as json
+type RawResponse interface {
+	SetBytes([]byte)
 }
 
 // submitForm is a helper used for submitting (ex.) GETs and POSTs to the server
@@ -216,12 +228,12 @@ func (client RestClient) submitForm(response interface{}, path string, request i
 	}
 
 	// Response must implement RawResponse
-	raw, ok := response.(v1.RawResponse)
+	raw, ok := response.(RawResponse)
 	if !ok {
-		return fmt.Errorf("can only decode raw response into type implementing v1.RawResponse")
+		return fmt.Errorf("can only decode raw response into type implementing RawResponse")
 	}
 
-	bodyBytes, err := ioutil.ReadAll(resp.Body)
+	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
 	}
@@ -236,8 +248,8 @@ func (client RestClient) get(response interface{}, path string, request interfac
 }
 
 // getRaw behaves identically to get but doesn't json decode the response, and
-// the response must implement the v1.RawResponse interface
-func (client RestClient) getRaw(response v1.RawResponse, path string, request interface{}) error {
+// the response must implement the RawResponse interface
+func (client RestClient) getRaw(response RawResponse, path string, request interface{}) error {
 	return client.submitForm(response, path, request, "GET", false /* encodeJSON */, false /* decodeJSON */)
 }
 
@@ -252,31 +264,13 @@ func (client RestClient) post(response interface{}, path string, request interfa
 // the StatusResponse includes data like the consensus version and current round
 // Not supported
 func (client RestClient) Status() (response generatedV2.NodeStatusResponse, err error) {
-	switch client.versionAffinity {
-	case APIVersionV2:
-		err = client.get(&response, "/v2/status", nil)
-	default:
-		var nodeStatus v1.NodeStatus
-		err = client.get(&nodeStatus, "/v1/status", nil)
-		if err == nil {
-			response = fillNodeStatusResponse(nodeStatus)
-		}
-	}
+	err = client.get(&response, "/v2/status", nil)
 	return
 }
 
 // WaitForBlock returns the node status after waiting for the given round.
 func (client RestClient) WaitForBlock(round basics.Round) (response generatedV2.NodeStatusResponse, err error) {
-	switch client.versionAffinity {
-	case APIVersionV2:
-		err = client.get(&response, fmt.Sprintf("/v2/status/wait-for-block-after/%d/", round), nil)
-	default:
-		var nodeStatus v1.NodeStatus
-		err = client.get(&nodeStatus, fmt.Sprintf("/v1/status/wait-for-block-after/%d/", round), nil)
-		if err == nil {
-			response = fillNodeStatusResponse(nodeStatus)
-		}
-	}
+	err = client.get(&response, fmt.Sprintf("/v2/status/wait-for-block-after/%d/", round), nil)
 	return
 }
 
@@ -286,45 +280,32 @@ func (client RestClient) HealthCheck() error {
 	return client.get(nil, "/health", nil)
 }
 
-func fillNodeStatusResponse(nodeStatus v1.NodeStatus) generatedV2.NodeStatusResponse {
-	return generatedV2.NodeStatusResponse{
-		LastRound:                 nodeStatus.LastRound,
-		LastVersion:               nodeStatus.LastVersion,
-		NextVersion:               nodeStatus.NextVersion,
-		NextVersionRound:          nodeStatus.NextVersionRound,
-		NextVersionSupported:      nodeStatus.NextVersionSupported,
-		TimeSinceLastRound:        uint64(nodeStatus.TimeSinceLastRound),
-		CatchupTime:               uint64(nodeStatus.CatchupTime),
-		StoppedAtUnsupportedRound: nodeStatus.StoppedAtUnsupportedRound,
-	}
-}
-
 // StatusAfterBlock waits for a block to occur then returns the StatusResponse after that block
 // blocks on the node end
 // Not supported
 func (client RestClient) StatusAfterBlock(blockNum uint64) (response generatedV2.NodeStatusResponse, err error) {
-	switch client.versionAffinity {
-	case APIVersionV2:
-		err = client.get(&response, fmt.Sprintf("/v2/status/wait-for-block-after/%d", blockNum), nil)
-	default:
-		var nodeStatus v1.NodeStatus
-		err = client.get(&nodeStatus, fmt.Sprintf("/v1/status/wait-for-block-after/%d", blockNum), nil)
-		if err == nil {
-			response = fillNodeStatusResponse(nodeStatus)
-		}
-	}
-
+	err = client.get(&response, fmt.Sprintf("/v2/status/wait-for-block-after/%d", blockNum), nil)
 	return
 }
 
 type pendingTransactionsParams struct {
-	Max uint64 `url:"max"`
+	Max    uint64 `url:"max"`
+	Format string `url:"format"`
 }
 
 // GetPendingTransactions asks algod for a snapshot of current pending txns on the node, bounded by maxTxns.
 // If maxTxns = 0, fetches as many transactions as possible.
-func (client RestClient) GetPendingTransactions(maxTxns uint64) (response v1.PendingTransactions, err error) {
-	err = client.get(&response, fmt.Sprintf("/v1/transactions/pending"), pendingTransactionsParams{maxTxns})
+func (client RestClient) GetPendingTransactions(maxTxns uint64) (response generatedV2.PendingTransactionsResponse, err error) {
+	err = client.get(&response, "/v2/transactions/pending", pendingTransactionsParams{Max: maxTxns, Format: "json"})
+	return
+}
+
+// GetRawPendingTransactions gets the raw encoded msgpack transactions.
+// If maxTxns = 0, fetches as many transactions as possible.
+func (client RestClient) GetRawPendingTransactions(maxTxns uint64) (response []byte, err error) {
+	var blob Blob
+	err = client.getRaw(&blob, "/v2/transactions/pending", pendingTransactionsParams{maxTxns, "msgpack"})
+	response = blob
 	return
 }
 
@@ -336,8 +317,8 @@ func (client RestClient) Versions() (response common.Version, err error) {
 }
 
 // LedgerSupply gets the supply details for the specified node's Ledger
-func (client RestClient) LedgerSupply() (response v1.Supply, err error) {
-	err = client.get(&response, "/v1/ledger/supply", nil)
+func (client RestClient) LedgerSupply() (response generatedV2.SupplyResponse, err error) {
+	err = client.get(&response, "/v2/ledger/supply", nil)
 	return
 }
 
@@ -380,24 +361,42 @@ type accountInformationParams struct {
 
 // TransactionsByAddr returns all transactions for a PK [addr] in the [first,
 // last] rounds range.
+// Deprecated: This function is only used in internal tests (restClient_test.go)
 func (client RestClient) TransactionsByAddr(addr string, first, last, max uint64) (response v1.TransactionList, err error) {
 	err = client.get(&response, fmt.Sprintf("/v1/account/%s/transactions", addr), transactionsByAddrParams{first, last, max})
 	return
 }
 
 // PendingTransactionsByAddr returns all the pending transactions for a PK [addr].
+// Deprecated: Use v2 API
 func (client RestClient) PendingTransactionsByAddr(addr string, max uint64) (response v1.PendingTransactions, err error) {
 	err = client.get(&response, fmt.Sprintf("/v1/account/%s/transactions/pending", addr), pendingTransactionsByAddrParams{max})
 	return
 }
 
+// PendingTransactionsByAddrV2 returns all the pending transactions for an addr.
+func (client RestClient) PendingTransactionsByAddrV2(addr string, max uint64) (response generatedV2.PendingTransactionsResponse, err error) {
+	err = client.get(&response, fmt.Sprintf("/v2/accounts/%s/transactions/pending", addr), pendingTransactionsByAddrParams{max})
+	return
+}
+
+// RawPendingTransactionsByAddrV2 returns all the pending transactions for an addr in raw msgpack format.
+func (client RestClient) RawPendingTransactionsByAddrV2(addr string, max uint64) (response []byte, err error) {
+	var blob Blob
+	err = client.getRaw(&blob, fmt.Sprintf("/v2/accounts/%s/transactions/pending", addr), pendingTransactionsParams{max, "msgpack"})
+	response = blob
+	return
+}
+
 // AssetInformation gets the AssetInformationResponse associated with the passed asset index
+// Deprecated: Use v2 API
 func (client RestClient) AssetInformation(index uint64) (response v1.AssetParams, err error) {
 	err = client.get(&response, fmt.Sprintf("/v1/asset/%d", index), nil)
 	return
 }
 
 // Assets gets up to max assets with maximum asset index assetIdx
+// Deprecated: Use v2 API
 func (client RestClient) Assets(assetIdx, max uint64) (response v1.AssetList, err error) {
 	err = client.get(&response, "/v1/assets", assetsParams{assetIdx, max})
 	return
@@ -417,8 +416,29 @@ func (client RestClient) ApplicationInformation(index uint64) (response generate
 }
 
 // AccountInformation also gets the AccountInformationResponse associated with the passed address
+// Deprecated: Use v2 API
 func (client RestClient) AccountInformation(address string) (response v1.Account, err error) {
 	err = client.get(&response, fmt.Sprintf("/v1/account/%s", address), nil)
+	return
+}
+
+type applicationBoxesParams struct {
+	Max uint64 `url:"max,omitempty"`
+}
+
+// ApplicationBoxes gets the BoxesResponse associated with the passed application ID
+func (client RestClient) ApplicationBoxes(appID uint64, maxBoxNum uint64) (response generatedV2.BoxesResponse, err error) {
+	err = client.get(&response, fmt.Sprintf("/v2/applications/%d/boxes", appID), applicationBoxesParams{maxBoxNum})
+	return
+}
+
+type applicationBoxByNameParams struct {
+	Name string `url:"name"`
+}
+
+// GetApplicationBoxByName gets the BoxResponse associated with the passed application ID and box name
+func (client RestClient) GetApplicationBoxByName(appID uint64, name string) (response generatedV2.BoxResponse, err error) {
+	err = client.get(&response, fmt.Sprintf("/v2/applications/%d/box", appID), applicationBoxByNameParams{name})
 	return
 }
 
@@ -434,7 +454,7 @@ func (client RestClient) AccountInformationV2(address string, includeCreatables 
 	return
 }
 
-// Blob represents arbitrary blob of data satisfying v1.RawResponse interface
+// Blob represents arbitrary blob of data satisfying RawResponse interface
 type Blob []byte
 
 // SetBytes fulfills the RawResponse interface on Blob
@@ -451,6 +471,7 @@ func (client RestClient) RawAccountInformationV2(address string) (response []byt
 }
 
 // TransactionInformation gets information about a specific transaction involving a specific account
+// Deprecated
 func (client RestClient) TransactionInformation(accountAddress, transactionID string) (response v1.Transaction, err error) {
 	transactionID = stripTransaction(transactionID)
 	err = client.get(&response, fmt.Sprintf("/v1/account/%s/transaction/%s", accountAddress, transactionID), nil)
@@ -466,6 +487,7 @@ func (client RestClient) TransactionInformation(accountAddress, transactionID st
 //
 // Or the transaction may have happened sufficiently long ago that the
 // node no longer remembers it, and this will return an error.
+// Deprecated
 func (client RestClient) PendingTransactionInformation(transactionID string) (response v1.Transaction, err error) {
 	transactionID = stripTransaction(transactionID)
 	err = client.get(&response, fmt.Sprintf("/v1/transactions/pending/%s", transactionID), nil)
@@ -477,6 +499,15 @@ func (client RestClient) PendingTransactionInformation(transactionID string) (re
 func (client RestClient) PendingTransactionInformationV2(transactionID string) (response generatedV2.PendingTransactionResponse, err error) {
 	transactionID = stripTransaction(transactionID)
 	err = client.get(&response, fmt.Sprintf("/v2/transactions/pending/%s", transactionID), nil)
+	return
+}
+
+// RawPendingTransactionInformationV2 gets information about a recently issued transaction in msgpack encoded bytes.
+func (client RestClient) RawPendingTransactionInformationV2(transactionID string) (response []byte, err error) {
+	transactionID = stripTransaction(transactionID)
+	var blob Blob
+	err = client.getRaw(&blob, fmt.Sprintf("/v2/transactions/pending/%s", transactionID), rawFormat{Format: "msgpack"})
+	response = blob
 	return
 }
 
@@ -509,24 +540,40 @@ func (client RestClient) RawAccountAssetInformation(accountAddress string, asset
 }
 
 // SuggestedFee gets the recommended transaction fee from the node
+// Deprecated
 func (client RestClient) SuggestedFee() (response v1.TransactionFee, err error) {
 	err = client.get(&response, "/v1/transactions/fee", nil)
 	return
 }
 
 // SuggestedParams gets the suggested transaction parameters
+// Deprecated
 func (client RestClient) SuggestedParams() (response v1.TransactionParams, err error) {
 	err = client.get(&response, "/v1/transactions/params", nil)
 	return
 }
 
+// SuggestedParamsV2 gets the suggested transaction parameters
+func (client RestClient) SuggestedParamsV2() (response generatedV2.TransactionParametersResponse, err error) {
+	err = client.get(&response, "/v2/transactions/params", nil)
+	return
+}
+
 // SendRawTransaction gets a SignedTxn and broadcasts it to the network
+// Deprecated
 func (client RestClient) SendRawTransaction(txn transactions.SignedTxn) (response v1.TransactionID, err error) {
 	err = client.post(&response, "/v1/transactions", protocol.Encode(&txn))
 	return
 }
 
+// SendRawTransactionV2 gets a SignedTxn and broadcasts it to the network
+func (client RestClient) SendRawTransactionV2(txn transactions.SignedTxn) (response generatedV2.PostTransactionsResponse, err error) {
+	err = client.post(&response, "/v2/transactions", protocol.Encode(&txn))
+	return
+}
+
 // SendRawTransactionGroup gets a SignedTxn group and broadcasts it to the network
+// Deprecated
 func (client RestClient) SendRawTransactionGroup(txgroup []transactions.SignedTxn) error {
 	// response is not terribly useful: it's the txid of the first transaction,
 	// which can be computed by the client anyway..
@@ -539,24 +586,30 @@ func (client RestClient) SendRawTransactionGroup(txgroup []transactions.SignedTx
 	return client.post(&response, "/v1/transactions", enc)
 }
 
+// SendRawTransactionGroupV2 gets a SignedTxn group and broadcasts it to the network
+func (client RestClient) SendRawTransactionGroupV2(txgroup []transactions.SignedTxn) error {
+	// response is not terribly useful: it's the txid of the first transaction,
+	// which can be computed by the client anyway..
+	var enc []byte
+	for _, tx := range txgroup {
+		enc = append(enc, protocol.Encode(&tx)...)
+	}
+
+	var response generatedV2.PostTransactionsResponse
+	return client.post(&response, "/v2/transactions", enc)
+}
+
 // Block gets the block info for the given round
-func (client RestClient) Block(round uint64) (response v1.Block, err error) {
-	err = client.get(&response, fmt.Sprintf("/v1/block/%d", round), nil)
+func (client RestClient) Block(round uint64) (response generatedV2.BlockResponse, err error) {
+	err = client.get(&response, fmt.Sprintf("/v2/blocks/%d", round), nil)
 	return
 }
 
 // RawBlock gets the encoded, raw msgpack block for the given round
 func (client RestClient) RawBlock(round uint64) (response []byte, err error) {
-	switch client.versionAffinity {
-	case APIVersionV2:
-		var blob Blob
-		err = client.getRaw(&blob, fmt.Sprintf("/v2/blocks/%d", round), rawFormat{Format: "msgpack"})
-		response = blob
-	default:
-		var raw v1.RawBlock
-		err = client.getRaw(&raw, fmt.Sprintf("/v1/block/%d", round), rawblockParams{1})
-		response = raw
-	}
+	var blob Blob
+	err = client.getRaw(&blob, fmt.Sprintf("/v2/blocks/%d", round), rawFormat{Format: "msgpack"})
+	response = blob
 	return
 }
 
@@ -638,7 +691,7 @@ func (client RestClient) doGetWithQuery(ctx context.Context, path string, queryA
 		return
 	}
 
-	bytes, err := ioutil.ReadAll(resp.Body)
+	bytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return
 	}
@@ -654,8 +707,20 @@ func (client RestClient) RawDryrun(data []byte) (response []byte, err error) {
 	return
 }
 
-// Proof gets a Merkle proof for a transaction in a block.
-func (client RestClient) Proof(txid string, round uint64, hashType crypto.HashType) (response generatedV2.ProofResponse, err error) {
+// StateProofs gets a state proof that covers a given round
+func (client RestClient) StateProofs(round uint64) (response generatedV2.StateProofResponse, err error) {
+	err = client.get(&response, fmt.Sprintf("/v2/stateproofs/%d", round), nil)
+	return
+}
+
+// LightBlockHeaderProof gets a Merkle proof for the light block header of a given round.
+func (client RestClient) LightBlockHeaderProof(round uint64) (response generatedV2.LightBlockHeaderProofResponse, err error) {
+	err = client.get(&response, fmt.Sprintf("/v2/blocks/%d/lightheader/proof", round), nil)
+	return
+}
+
+// TransactionProof gets a Merkle proof for a transaction in a block.
+func (client RestClient) TransactionProof(txid string, round uint64, hashType crypto.HashType) (response generatedV2.TransactionProofResponse, err error) {
 	txid = stripTransaction(txid)
 	err = client.get(&response, fmt.Sprintf("/v2/blocks/%d/transactions/%s/proof", round, txid), proofParams{HashType: hashType.String()})
 	return

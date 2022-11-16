@@ -30,7 +30,6 @@ import (
 	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/crypto"
 	generatedV2 "github.com/algorand/go-algorand/daemon/algod/api/server/v2/generated"
-	v1 "github.com/algorand/go-algorand/daemon/algod/api/spec/v1"
 	"github.com/algorand/go-algorand/data/basics"
 	"github.com/algorand/go-algorand/data/bookkeeping"
 	"github.com/algorand/go-algorand/data/transactions"
@@ -156,44 +155,43 @@ var clerkCmd = &cobra.Command{
 	},
 }
 
-func waitForCommit(client libgoal.Client, txid string, transactionLastValidRound uint64) (txn v1.Transaction, err error) {
+func waitForCommit(client libgoal.Client, txid string, transactionLastValidRound uint64) (txn generatedV2.PendingTransactionResponse, err error) {
 	// Get current round information
 	stat, err := client.Status()
 	if err != nil {
-		return v1.Transaction{}, fmt.Errorf(errorRequestFail, err)
+		return generatedV2.PendingTransactionResponse{}, fmt.Errorf(errorRequestFail, err)
 	}
 
 	for {
 		// Check if we know about the transaction yet
-		txn, err = client.PendingTransactionInformation(txid)
+		txn, err = client.PendingTransactionInformationV2(txid)
 		if err != nil {
-			return v1.Transaction{}, fmt.Errorf(errorRequestFail, err)
+			return generatedV2.PendingTransactionResponse{}, fmt.Errorf(errorRequestFail, err)
 		}
 
-		if txn.ConfirmedRound > 0 {
-			reportInfof(infoTxCommitted, txid, txn.ConfirmedRound)
+		if txn.ConfirmedRound != nil && *txn.ConfirmedRound > 0 {
+			reportInfof(infoTxCommitted, txid, *txn.ConfirmedRound)
 			break
 		}
 
 		if txn.PoolError != "" {
-			return v1.Transaction{}, fmt.Errorf(txPoolError, txid, txn.PoolError)
+			return generatedV2.PendingTransactionResponse{}, fmt.Errorf(txPoolError, txid, txn.PoolError)
 		}
 
 		// check if we've already committed to the block number equals to the transaction's last valid round.
 		// if this is the case, the transaction would not be included in the blockchain, and we can exit right
 		// here.
 		if transactionLastValidRound > 0 && stat.LastRound >= transactionLastValidRound {
-			return v1.Transaction{}, fmt.Errorf(errorTransactionExpired, txid)
+			return generatedV2.PendingTransactionResponse{}, fmt.Errorf(errorTransactionExpired, txid)
 		}
 
 		reportInfof(infoTxPending, txid, stat.LastRound)
 		// WaitForRound waits until round "stat.LastRound+1" is committed
 		stat, err = client.WaitForRound(stat.LastRound)
 		if err != nil {
-			return v1.Transaction{}, fmt.Errorf(errorRequestFail, err)
+			return generatedV2.PendingTransactionResponse{}, fmt.Errorf(errorRequestFail, err)
 		}
 	}
-
 	return
 }
 
@@ -384,7 +382,7 @@ var sendCmd = &cobra.Command{
 			}
 		}
 		client := ensureFullClient(dataDir)
-		firstValid, lastValid, err = client.ComputeValidityRounds(firstValid, lastValid, numValidRounds)
+		firstValid, lastValid, _, err = client.ComputeValidityRounds(firstValid, lastValid, numValidRounds)
 		if err != nil {
 			reportErrorf(err.Error())
 		}
@@ -424,7 +422,7 @@ var sendCmd = &cobra.Command{
 					CurrentProtocol: proto,
 				},
 			}
-			groupCtx, err := verify.PrepareGroupContext([]transactions.SignedTxn{uncheckedTxn}, blockHeader)
+			groupCtx, err := verify.PrepareGroupContext([]transactions.SignedTxn{uncheckedTxn}, blockHeader, nil)
 			if err == nil {
 				err = verify.LogicSigSanityCheck(&uncheckedTxn, 0, groupCtx)
 			}
@@ -544,7 +542,7 @@ var rawsendCmd = &cobra.Command{
 			reportErrorf(fileReadError, txFilename, err)
 		}
 
-		dec := protocol.NewDecoderBytes(data)
+		dec := protocol.NewMsgpDecoderBytes(data)
 		client := ensureAlgodClient(ensureSingleDataDir())
 
 		txnIDs := make(map[transactions.Txid]transactions.SignedTxn)
@@ -603,14 +601,14 @@ var rawsendCmd = &cobra.Command{
 		for txid, txidStr := range pendingTxns {
 			for {
 				// Check if we know about the transaction yet
-				txn, err := client.PendingTransactionInformation(txidStr)
+				txn, err := client.PendingTransactionInformationV2(txidStr)
 				if err != nil {
 					txnErrors[txid] = err.Error()
 					reportWarnf(errorRequestFail, err)
 					continue
 				}
 
-				if txn.ConfirmedRound > 0 {
+				if txn.ConfirmedRound != nil && *txn.ConfirmedRound > 0 {
 					reportInfof(infoTxCommitted, txidStr, txn.ConfirmedRound)
 					break
 				}
@@ -673,7 +671,7 @@ var inspectCmd = &cobra.Command{
 				reportErrorf(fileReadError, txFilename, err)
 			}
 
-			dec := protocol.NewDecoderBytes(data)
+			dec := protocol.NewMsgpDecoderBytes(data)
 			count := 0
 			for {
 				var txn transactions.SignedTxn
@@ -773,7 +771,7 @@ var signCmd = &cobra.Command{
 		}
 
 		var outData []byte
-		dec := protocol.NewDecoderBytes(data)
+		dec := protocol.NewMsgpDecoderBytes(data)
 		// read the entire file and prepare in-memory copy of each signed transaction, with grouping.
 		txnGroups := make(map[crypto.Digest][]*transactions.SignedTxn)
 		var groupsOrder []crypto.Digest
@@ -825,7 +823,7 @@ var signCmd = &cobra.Command{
 			}
 			var groupCtx *verify.GroupContext
 			if lsig.Logic != nil {
-				groupCtx, err = verify.PrepareGroupContext(txnGroup, contextHdr)
+				groupCtx, err = verify.PrepareGroupContext(txnGroup, contextHdr, nil)
 				if err != nil {
 					// this error has to be unsupported protocol
 					reportErrorf("%s: %v", txFilename, err)
@@ -868,7 +866,7 @@ var groupCmd = &cobra.Command{
 			reportErrorf(fileReadError, txFilename, err)
 		}
 
-		dec := protocol.NewDecoderBytes(data)
+		dec := protocol.NewMsgpDecoderBytes(data)
 
 		var stxns []transactions.SignedTxn
 		var group transactions.TxGroup
@@ -920,7 +918,7 @@ var splitCmd = &cobra.Command{
 			reportErrorf(fileReadError, txFilename, err)
 		}
 
-		dec := protocol.NewDecoderBytes(data)
+		dec := protocol.NewMsgpDecoderBytes(data)
 
 		var txns []transactions.SignedTxn
 		for {
@@ -1120,7 +1118,7 @@ var dryrunCmd = &cobra.Command{
 		if err != nil {
 			reportErrorf(fileReadError, txFilename, err)
 		}
-		dec := protocol.NewDecoderBytes(data)
+		dec := protocol.NewMsgpDecoderBytes(data)
 		stxns := make([]transactions.SignedTxn, 0, 10)
 		for {
 			var txn transactions.SignedTxn
@@ -1162,6 +1160,7 @@ var dryrunCmd = &cobra.Command{
 				reportErrorf("program size too large: %d > %d", len(txn.Lsig.Logic), params.LogicSigMaxSize)
 			}
 			ep := logic.NewEvalParams(txgroup, &params, nil)
+			ep.SigLedger = logic.NoHeaderLedger{}
 			err := logic.CheckSignature(i, ep)
 			if err != nil {
 				reportErrorf("program failed Check: %s", err)

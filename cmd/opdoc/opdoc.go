@@ -28,11 +28,13 @@ import (
 	"github.com/algorand/go-algorand/protocol"
 )
 
+var docVersion = 8
+
 func opGroupMarkdownTable(names []string, out io.Writer) {
 	fmt.Fprint(out, `| Opcode | Description |
 | - | -- |
 `)
-	opSpecs := logic.OpsByName[logic.LogicVersion]
+	opSpecs := logic.OpsByName[docVersion]
 	for _, opname := range names {
 		spec, ok := opSpecs[opname]
 		if !ok {
@@ -212,7 +214,11 @@ func opToMarkdown(out io.Writer, specs []logic.OpSpec, groupDocWritten map[strin
 			if from == to {
 				costString += fmt.Sprintf("    - %s (v%d)\n", cost, to)
 			} else {
-				costString += fmt.Sprintf("    - %s (v%d - v%d)\n", cost, from, to)
+				if cost.To < docVersion {
+					costString += fmt.Fprintf(out, "    - %s (v%d - v%d)\n", cost.Cost, cost.From, cost.To)
+				} else {
+					costString += fmt.Fprintf(out, "    - %s (since v%d)\n", cost.Cost, cost.From)
+				}
 			}
 			cost = spec.OpDetails.DocCost(len(spec.Arg.Types))
 			from = spec.Version
@@ -254,7 +260,7 @@ func opToMarkdown(out io.Writer, specs []logic.OpSpec, groupDocWritten map[strin
 
 func opsToMarkdown(out io.Writer) (err error) {
 	out.Write([]byte("# Opcodes\n\nOps have a 'cost' of 1 unless otherwise specified.\n\n"))
-
+	opSpecs := logic.OpcodesByVersion(uint64(docVersion))
 	written := make(map[string]bool)
 	for _, name := range logic.OpNames {
 		specs := logic.SpecsByName(name)
@@ -353,7 +359,7 @@ func argEnums(name string) ([]string, string) {
 func buildLanguageSpec(opGroups map[string][]string) *LanguageSpec {
 	records := make([]OpRecord, len(logic.OpNames))
 	for i, name := range logic.OpNames {
-		spec := logic.OpsByName[logic.LogicVersion][name]
+		spec := logic.OpsByName[logic.docVersion][name]
 		records[i].Opcode = spec.Opcode
 		records[i].Name = spec.Name
 		records[i].Args = typeString(spec.Arg.Types)
@@ -367,7 +373,7 @@ func buildLanguageSpec(opGroups map[string][]string) *LanguageSpec {
 		//TODO: Add multi-op support
 	}
 	return &LanguageSpec{
-		EvalMaxVersion:  logic.LogicVersion,
+		EvalMaxVersion:  docVersion,
 		LogicSigVersion: config.Consensus[protocol.ConsensusCurrentVersion].LogicSigVersion,
 		Ops:             records,
 	}
@@ -403,7 +409,7 @@ func main() {
 
 	written := make(map[string]bool)
 	for _, name := range logic.OpNames {
-		spec := logic.OpsByName[logic.LogicVersion][name]
+		spec := logic.OpsByName[docVersion][name]
 		for _, imm := range spec.OpDetails.Immediates {
 			if imm.Group != nil && !written[imm.Group.Name] {
 				out := create(strings.ToLower(imm.Group.Name) + "_fields.md")

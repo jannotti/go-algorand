@@ -39,8 +39,9 @@ import (
 
 	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/crypto"
-	"github.com/algorand/go-algorand/crypto/compactcert"
+	"github.com/algorand/go-algorand/crypto/stateproof"
 	"github.com/algorand/go-algorand/data/basics"
+	"github.com/algorand/go-algorand/data/stateproofmsg"
 	"github.com/algorand/go-algorand/data/transactions"
 	"github.com/algorand/go-algorand/data/transactions/logic"
 	"github.com/algorand/go-algorand/protocol"
@@ -94,23 +95,62 @@ type Txn struct {
 	Accounts          []basics.Address
 	ForeignApps       []basics.AppIndex
 	ForeignAssets     []basics.AssetIndex
+	Boxes             []transactions.BoxRef
 	LocalStateSchema  basics.StateSchema
 	GlobalStateSchema basics.StateSchema
 	ApprovalProgram   interface{} // string, nil, or []bytes if already compiled
 	ClearStateProgram interface{} // string, nil or []bytes if already compiled
 	ExtraProgramPages uint32
 
-	CertRound basics.Round
-	CertType  protocol.CompactCertType
-	Cert      compactcert.Cert
+	StateProofType protocol.StateProofType
+	StateProof     stateproof.StateProof
+	StateProofMsg  stateproofmsg.Message
+}
+
+// internalCopy "finishes" a shallow copy done by a simple Go assignment by
+// copying all of the slice fields
+func (tx *Txn) internalCopy() {
+	tx.Note = append([]byte(nil), tx.Note...)
+	if tx.ApplicationArgs != nil {
+		tx.ApplicationArgs = append([][]byte(nil), tx.ApplicationArgs...)
+		for i := range tx.ApplicationArgs {
+			tx.ApplicationArgs[i] = append([]byte(nil), tx.ApplicationArgs[i]...)
+		}
+	}
+	tx.Accounts = append([]basics.Address(nil), tx.Accounts...)
+	tx.ForeignApps = append([]basics.AppIndex(nil), tx.ForeignApps...)
+	tx.ForeignAssets = append([]basics.AssetIndex(nil), tx.ForeignAssets...)
+	tx.Boxes = append([]transactions.BoxRef(nil), tx.Boxes...)
+	for i := 0; i < len(tx.Boxes); i++ {
+		tx.Boxes[i].Name = append([]byte(nil), tx.Boxes[i].Name...)
+	}
+
+	// Programs may or may not actually be byte slices.  The other
+	// possibilitiues don't require copies.
+	if program, ok := tx.ApprovalProgram.([]byte); ok {
+		tx.ApprovalProgram = append([]byte(nil), program...)
+	}
+	if program, ok := tx.ClearStateProgram.([]byte); ok {
+		tx.ClearStateProgram = append([]byte(nil), program...)
+	}
 }
 
 // Noted returns a new Txn with the given note field.
-func (tx *Txn) Noted(note string) *Txn {
-	copy := &Txn{}
-	*copy = *tx
-	copy.Note = []byte(note)
-	return copy
+func (tx Txn) Noted(note string) *Txn {
+	tx.internalCopy()
+	tx.Note = []byte(note)
+	return &tx
+}
+
+// Args returns a new Txn with the given strings as app args
+func (tx Txn) Args(strings ...string) *Txn {
+	tx.internalCopy()
+	bytes := make([][]byte, len(strings))
+	for i, s := range strings {
+		bytes[i] = []byte(s)
+	}
+	tx.ApplicationArgs = bytes
+	return &tx
 }
 
 // FillDefaults populates some obvious defaults from config params,
@@ -234,16 +274,17 @@ func (tx Txn) Txn() transactions.Transaction {
 			Accounts:          tx.Accounts,
 			ForeignApps:       tx.ForeignApps,
 			ForeignAssets:     tx.ForeignAssets,
+			Boxes:             tx.Boxes,
 			LocalStateSchema:  tx.LocalStateSchema,
 			GlobalStateSchema: tx.GlobalStateSchema,
 			ApprovalProgram:   assemble(tx.ApprovalProgram),
 			ClearStateProgram: assemble(tx.ClearStateProgram),
 			ExtraProgramPages: tx.ExtraProgramPages,
 		},
-		CompactCertTxnFields: transactions.CompactCertTxnFields{
-			CertRound: tx.CertRound,
-			CertType:  tx.CertType,
-			Cert:      tx.Cert,
+		StateProofTxnFields: transactions.StateProofTxnFields{
+			StateProofType: tx.StateProofType,
+			StateProof:     tx.StateProof,
+			Message:        tx.StateProofMsg,
 		},
 	}
 }

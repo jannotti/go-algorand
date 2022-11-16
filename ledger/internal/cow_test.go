@@ -85,15 +85,19 @@ func (ml *mockLedger) getKey(addr basics.Address, aidx basics.AppIndex, global b
 	return basics.TealValue{}, false, nil
 }
 
-func (ml *mockLedger) txnCounter() uint64 {
+func (ml *mockLedger) kvGet(key string) ([]byte, bool, error) {
+	return nil, false, nil
+}
+
+func (ml *mockLedger) Counter() uint64 {
 	return 0
 }
 
-func (ml *mockLedger) compactCertNext() basics.Round {
+func (ml *mockLedger) GetStateProofNextRound() basics.Round {
 	return 0
 }
 
-func (ml *mockLedger) blockHdr(rnd basics.Round) (bookkeeping.BlockHeader, error) {
+func (ml *mockLedger) BlockHdr(rnd basics.Round) (bookkeeping.BlockHeader, error) {
 	err, hit := ml.blockErr[rnd]
 	if hit {
 		return bookkeeping.BlockHeader{}, err
@@ -103,7 +107,7 @@ func (ml *mockLedger) blockHdr(rnd basics.Round) (bookkeeping.BlockHeader, error
 }
 
 func (ml *mockLedger) blockHdrCached(rnd basics.Round) (bookkeeping.BlockHeader, error) {
-	return ml.blockHdr(rnd)
+	return ml.blockHdrCached(rnd)
 }
 
 func checkCowByUpdate(t *testing.T, cow *roundCowState, delta ledgercore.AccountDeltas) {

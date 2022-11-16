@@ -43,6 +43,7 @@ type indexerLedgerForEval interface {
 	GetAssetCreator(map[basics.AssetIndex]struct{}) (map[basics.AssetIndex]FoundAddress, error)
 	GetAppCreator(map[basics.AppIndex]struct{}) (map[basics.AppIndex]FoundAddress, error)
 	LatestTotals() (ledgercore.AccountTotals, error)
+	LookupKv(basics.Round, string) ([]byte, error)
 
 	BlockHdrCached(basics.Round) (bookkeeping.BlockHeader, error)
 }
@@ -149,6 +150,15 @@ func (l indexerLedgerConnector) lookupResource(round basics.Round, address basic
 	return accountResourceMap[address][Creatable{aidx, ctype}], nil
 }
 
+// LookupKv delegates to the Ledger and marks the box key as touched for post-processing
+func (l indexerLedgerConnector) LookupKv(rnd basics.Round, key string) ([]byte, error) {
+	value, err := l.il.LookupKv(rnd, key)
+	if err != nil {
+		return value, fmt.Errorf("LookupKv() in indexerLedgerConnector internal error: %w", err)
+	}
+	return value, nil
+}
+
 // GetCreatorForRound is part of LedgerForEvaluator interface.
 func (l indexerLedgerConnector) GetCreatorForRound(_ basics.Round, cindex basics.CreatableIndex, ctype basics.CreatableType) (basics.Address, bool, error) {
 	var foundAddress FoundAddress
@@ -197,10 +207,10 @@ func (l indexerLedgerConnector) LatestTotals() (rnd basics.Round, totals ledgerc
 	return
 }
 
-// CompactCertVoters is part of LedgerForEvaluator interface.
-func (l indexerLedgerConnector) CompactCertVoters(_ basics.Round) (*ledgercore.VotersForRound, error) {
+// VotersForStateProof is part of LedgerForEvaluator interface.
+func (l indexerLedgerConnector) VotersForStateProof(_ basics.Round) (*ledgercore.VotersForRound, error) {
 	// This function is not used by evaluator.
-	return nil, errors.New("CompactCertVoters() not implemented")
+	return nil, errors.New("VotersForStateProof() not implemented")
 }
 
 func makeIndexerLedgerConnector(il indexerLedgerForEval, genesisHash crypto.Digest, genesisProto config.ConsensusParams, latestRound basics.Round, roundResources EvalForIndexerResources) indexerLedgerConnector {

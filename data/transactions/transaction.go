@@ -97,7 +97,7 @@ type Transaction struct {
 	AssetTransferTxnFields
 	AssetFreezeTxnFields
 	ApplicationCallTxnFields
-	CompactCertTxnFields
+	StateProofTxnFields
 }
 
 // ApplyData contains information about the transaction's execution.
@@ -290,6 +290,13 @@ var errKeyregTxnNotEmptyStateProofPK = errors.New("transaction field StateProofP
 var errKeyregTxnNonParticipantShouldBeEmptyStateProofPK = errors.New("non participation keyreg transactions should contain empty stateProofPK")
 var errKeyregTxnOfflineShouldBeEmptyStateProofPK = errors.New("offline keyreg transactions should contain empty stateProofPK")
 var errKeyRegTxnValidityPeriodTooLong = errors.New("validity period for keyreg transaction is too long")
+var errStateProofNotSupported = errors.New("state proofs not supported")
+var errBadSenderInStateProofTxn = errors.New("sender must be the state-proof sender")
+var errFeeMustBeZeroInStateproofTxn = errors.New("fee must be zero in state-proof transaction")
+var errNoteMustBeEmptyInStateproofTxn = errors.New("note must be empty in state-proof transaction")
+var errGroupMustBeZeroInStateproofTxn = errors.New("group must be zero in state-proof transaction")
+var errRekeyToMustBeZeroInStateproofTxn = errors.New("rekey must be zero in state-proof transaction")
+var errLeaseMustBeZeroInStateproofTxn = errors.New("lease must be zero in state-proof transaction")
 
 // WellFormed checks that the transaction looks reasonable on its own (but not necessarily valid against the actual ledger). It does not check signatures.
 func (tx Transaction) WellFormed(spec SpecialAddresses, proto config.ConsensusParams) error {
@@ -343,7 +350,6 @@ func (tx Transaction) WellFormed(spec SpecialAddresses, proto config.ConsensusPa
 			if !suppliesNullKeys {
 				return errKeyregTxnGoingOnlineWithNonParticipating
 			}
-
 		}
 
 		if err := tx.stateProofPKWellFormed(proto); err != nil {
@@ -371,12 +377,8 @@ func (tx Transaction) WellFormed(spec SpecialAddresses, proto config.ConsensusPa
 
 		// Ensure requested action is valid
 		switch tx.OnCompletion {
-		case NoOpOC:
-		case OptInOC:
-		case CloseOutOC:
-		case ClearStateOC:
-		case UpdateApplicationOC:
-		case DeleteApplicationOC:
+		case NoOpOC, OptInOC, CloseOutOC, ClearStateOC, UpdateApplicationOC, DeleteApplicationOC:
+			/* ok */
 		default:
 			return fmt.Errorf("invalid application OnCompletion")
 		}
@@ -442,8 +444,12 @@ func (tx Transaction) WellFormed(spec SpecialAddresses, proto config.ConsensusPa
 			return fmt.Errorf("tx.ForeignAssets too long, max number of foreign assets is %d", proto.MaxAppTxnForeignAssets)
 		}
 
+		if len(tx.Boxes) > proto.MaxAppBoxReferences {
+			return fmt.Errorf("tx.Boxes too long, max number of box references is %d", proto.MaxAppBoxReferences)
+		}
+
 		// Limit the sum of all types of references that bring in account records
-		if len(tx.Accounts)+len(tx.ForeignApps)+len(tx.ForeignAssets) > proto.MaxAppTotalTxnReferences {
+		if len(tx.Accounts)+len(tx.ForeignApps)+len(tx.ForeignAssets)+len(tx.Boxes) > proto.MaxAppTotalTxnReferences {
 			return fmt.Errorf("tx references exceed MaxAppTotalTxnReferences = %d", proto.MaxAppTotalTxnReferences)
 		}
 
@@ -464,6 +470,13 @@ func (tx Transaction) WellFormed(spec SpecialAddresses, proto config.ConsensusPa
 			return fmt.Errorf("app programs too long. max total len %d bytes", pages*proto.MaxAppTotalProgramLen)
 		}
 
+		for i, br := range tx.Boxes {
+			// recall 0 is the current app so indexes are shifted, thus test is for greater than, not gte.
+			if br.Index > uint64(len(tx.ForeignApps)) {
+				return fmt.Errorf("tx.Boxes[%d].Index is %d. Exceeds len(tx.ForeignApps)", i, br.Index)
+			}
+		}
+
 		if tx.LocalStateSchema.NumEntries() > proto.MaxLocalSchemaEntries {
 			return fmt.Errorf("tx.LocalStateSchema too large, max number of keys is %d", proto.MaxLocalSchemaEntries)
 		}
@@ -472,32 +485,32 @@ func (tx Transaction) WellFormed(spec SpecialAddresses, proto config.ConsensusPa
 			return fmt.Errorf("tx.GlobalStateSchema too large, max number of keys is %d", proto.MaxGlobalSchemaEntries)
 		}
 
-	case protocol.CompactCertTx:
-		if proto.CompactCertRounds == 0 {
-			return fmt.Errorf("compact certs not supported")
+	case protocol.StateProofTx:
+		if proto.StateProofInterval == 0 {
+			return errStateProofNotSupported
 		}
 
-		// This is a placeholder transaction used to store compact certs
+		// This is a placeholder transaction used to store state proofs
 		// on the ledger, and ensure they are broadly available.  Most of
 		// the fields must be empty.  It must be issued from a special
 		// sender address.
-		if tx.Sender != CompactCertSender {
-			return fmt.Errorf("sender must be the compact-cert sender")
+		if tx.Sender != StateProofSender {
+			return errBadSenderInStateProofTxn
 		}
 		if !tx.Fee.IsZero() {
-			return fmt.Errorf("fee must be zero")
+			return errFeeMustBeZeroInStateproofTxn
 		}
 		if len(tx.Note) != 0 {
-			return fmt.Errorf("note must be empty")
+			return errNoteMustBeEmptyInStateproofTxn
 		}
 		if !tx.Group.IsZero() {
-			return fmt.Errorf("group must be zero")
+			return errGroupMustBeZeroInStateproofTxn
 		}
 		if !tx.RekeyTo.IsZero() {
-			return fmt.Errorf("rekey must be zero")
+			return errRekeyToMustBeZeroInStateproofTxn
 		}
 		if tx.Lease != [32]byte{} {
-			return fmt.Errorf("lease must be zero")
+			return errLeaseMustBeZeroInStateproofTxn
 		}
 
 	default:
@@ -529,8 +542,8 @@ func (tx Transaction) WellFormed(spec SpecialAddresses, proto config.ConsensusPa
 		nonZeroFields[protocol.ApplicationCallTx] = true
 	}
 
-	if !tx.CompactCertTxnFields.Empty() {
-		nonZeroFields[protocol.CompactCertTx] = true
+	if !tx.StateProofTxnFields.Empty() {
+		nonZeroFields[protocol.StateProofTx] = true
 	}
 
 	for t, nonZero := range nonZeroFields {
@@ -540,8 +553,8 @@ func (tx Transaction) WellFormed(spec SpecialAddresses, proto config.ConsensusPa
 	}
 
 	if !proto.EnableFeePooling && tx.Fee.LessThan(basics.MicroAlgos{Raw: proto.MinTxnFee}) {
-		if tx.Type == protocol.CompactCertTx {
-			// Zero fee allowed for compact cert txn.
+		if tx.Type == protocol.StateProofTx {
+			// Zero fee allowed for stateProof txn.
 		} else {
 			return makeMinFeeErrorf("transaction had fee %d, which is less than the minimum %d", tx.Fee.Raw, proto.MinTxnFee)
 		}

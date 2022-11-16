@@ -28,7 +28,6 @@ import (
 	"github.com/algorand/go-algorand/agreement"
 	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/crypto"
-	"github.com/algorand/go-algorand/crypto/compactcert"
 	"github.com/algorand/go-algorand/data/basics"
 	"github.com/algorand/go-algorand/data/bookkeeping"
 	"github.com/algorand/go-algorand/data/transactions"
@@ -87,7 +86,7 @@ type Ledger struct {
 	trackers  trackerRegistry
 	trackerMu deadlock.RWMutex
 
-	headerCache heapLRUCache
+	headerCache blockHeaderCache
 
 	// verifiedTxnCache holds all the verified transactions state
 	verifiedTxnCache verify.VerifiedTransactionCache
@@ -125,7 +124,7 @@ func OpenLedger(
 		dbPathPrefix:                   dbPathPrefix,
 	}
 
-	l.headerCache.maxEntries = 10
+	l.headerCache.initialize()
 
 	defer func() {
 		if err != nil {
@@ -166,6 +165,12 @@ func OpenLedger(
 	}
 
 	return l, nil
+}
+
+// ReloadLedger is exported for the benefit of tests in the internal
+// package. Revisit this when we rename / restructure that thing
+func (l *Ledger) ReloadLedger() error {
+	return l.reloadLedger()
 }
 
 func (l *Ledger) reloadLedger() error {
@@ -438,10 +443,10 @@ func (l *Ledger) GetCreator(cidx basics.CreatableIndex, ctype basics.CreatableTy
 	return l.accts.GetCreatorForRound(l.blockQ.latest(), cidx, ctype)
 }
 
-// CompactCertVoters returns the top online accounts at round rnd.
+// VotersForStateProof returns the top online accounts at round rnd.
 // The result might be nil, even with err=nil, if there are no voters
-// for that round because compact certs were not enabled.
-func (l *Ledger) CompactCertVoters(rnd basics.Round) (*ledgercore.VotersForRound, error) {
+// for that round because state proofs were not enabled.
+func (l *Ledger) VotersForStateProof(rnd basics.Round) (*ledgercore.VotersForRound, error) {
 	l.trackerMu.RLock()
 	defer l.trackerMu.RUnlock()
 	return l.acctsOnline.voters.getVoters(rnd)
@@ -527,6 +532,23 @@ func (l *Ledger) lookupResource(rnd basics.Round, addr basics.Address, aidx basi
 	return res, nil
 }
 
+// LookupKv loads a KV pair from the accounts update
+func (l *Ledger) LookupKv(rnd basics.Round, key string) ([]byte, error) {
+	l.trackerMu.RLock()
+	defer l.trackerMu.RUnlock()
+
+	return l.accts.LookupKv(rnd, key)
+}
+
+// LookupKeysByPrefix searches keys with specific prefix, up to `maxKeyNum`
+// if `maxKeyNum` == 0, then it loads all keys with such prefix
+func (l *Ledger) LookupKeysByPrefix(round basics.Round, keyPrefix string, maxKeyNum uint64) ([]string, error) {
+	l.trackerMu.RLock()
+	defer l.trackerMu.RUnlock()
+
+	return l.accts.LookupKeysByPrefix(round, keyPrefix, maxKeyNum)
+}
+
 // LookupAgreement returns account data used by agreement.
 func (l *Ledger) LookupAgreement(rnd basics.Round, addr basics.Address) (basics.OnlineAccountData, error) {
 	l.trackerMu.RLock()
@@ -568,7 +590,7 @@ func (l *Ledger) LatestTotals() (basics.Round, ledgercore.AccountTotals, error) 
 func (l *Ledger) OnlineTotals(rnd basics.Round) (basics.MicroAlgos, error) {
 	l.trackerMu.RLock()
 	defer l.trackerMu.RUnlock()
-	return l.acctsOnline.OnlineTotals(rnd)
+	return l.acctsOnline.onlineTotals(rnd)
 }
 
 // CheckDup return whether a transaction is a duplicate one.
@@ -599,15 +621,14 @@ func (l *Ledger) Block(rnd basics.Round) (blk bookkeeping.Block, err error) {
 
 // BlockHdr returns the BlockHeader of the block for round rnd.
 func (l *Ledger) BlockHdr(rnd basics.Round) (blk bookkeeping.BlockHeader, err error) {
-	value, exists := l.headerCache.Get(rnd)
+	blk, exists := l.headerCache.get(rnd)
 	if exists {
-		blk = value.(bookkeeping.BlockHeader)
 		return
 	}
 
 	blk, err = l.blockQ.getBlockHdr(rnd)
 	if err == nil {
-		l.headerCache.Put(rnd, blk)
+		l.headerCache.put(blk)
 	}
 	return
 }
@@ -658,7 +679,7 @@ func (l *Ledger) AddValidatedBlock(vb ledgercore.ValidatedBlock, cert agreement.
 	if err != nil {
 		return err
 	}
-	l.headerCache.Put(blk.Round(), blk.BlockHeader)
+	l.headerCache.put(blk.BlockHeader)
 	l.trackers.newBlock(blk, vb.Delta())
 	l.log.Debugf("ledger.AddValidatedBlock: added blk %d", blk.Round())
 	return nil
@@ -803,24 +824,6 @@ func (l *Ledger) Validate(ctx context.Context, blk bookkeeping.Block, executionP
 
 	vb := ledgercore.MakeValidatedBlock(blk, delta)
 	return &vb, nil
-}
-
-// CompactCertParams computes the parameters for building or verifying
-// a compact cert for block hdr, using voters from block votersHdr.
-func CompactCertParams(votersHdr bookkeeping.BlockHeader, hdr bookkeeping.BlockHeader) (res compactcert.Params, err error) {
-	return internal.CompactCertParams(votersHdr, hdr)
-}
-
-// AcceptableCompactCertWeight computes the acceptable signed weight
-// of a compact cert if it were to appear in a transaction with a
-// particular firstValid round.  Earlier rounds require a smaller cert.
-// votersHdr specifies the block that contains the Merkle commitment of
-// the voters for this compact cert (and thus the compact cert is for
-// votersHdr.Round() + CompactCertRounds).
-//
-// logger must not be nil; use at least logging.Base()
-func AcceptableCompactCertWeight(votersHdr bookkeeping.BlockHeader, firstValid basics.Round, logger logging.Logger) uint64 {
-	return internal.AcceptableCompactCertWeight(votersHdr, firstValid, logger)
 }
 
 // DebuggerLedger defines the minimal set of method required for creating a debug balances.

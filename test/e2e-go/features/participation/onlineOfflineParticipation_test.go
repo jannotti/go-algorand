@@ -199,14 +199,15 @@ func TestNewAccountCanGoOnlineAndParticipate(t *testing.T) {
 	fixture.WaitForTxnConfirmation(seededRound+maxRoundsToWaitForTxnConfirm, newAccount, onlineTxID)
 	nodeStatus, _ = client.Status()
 	onlineRound := nodeStatus.LastRound
-	newAccountStatus, err := client.AccountInformation(newAccount)
+	newAccountStatus, err := client.AccountInformationV2(newAccount, false)
 	a.NoError(err, "client should be able to get information about new account")
 	a.Equal(basics.Online.String(), newAccountStatus.Status, "new account should be online")
 
 	// transfer the funds and close to the new account
 	amountToSend := richBalance - 3*transactionFee - amountToSendInitial - minAcctBalance
 	txn := fixture.SendMoneyAndWait(onlineRound, amountToSend, transactionFee, richAccount, newAccount, newAccount)
-	fundedRound := txn.ConfirmedRound
+	a.NotNil(txn.ConfirmedRound)
+	fundedRound := *txn.ConfirmedRound
 
 	nodeStatus, _ = client.Status()
 	params, err := client.ConsensusParams(nodeStatus.LastRound)
@@ -291,8 +292,8 @@ func TestAccountGoesOnlineForShortPeriod(t *testing.T) {
 
 	// we try to register online with a period in which we don't have stateproof keys
 	partKeyFirstValid := uint64(1)
-	// TODO: Change consensus version when compact certs are deployed
-	partKeyLastValid := config.Consensus[protocol.ConsensusFuture].CompactCertRounds - 1
+	// TODO: Change consensus version when state proofs are deployed
+	partKeyLastValid := config.Consensus[protocol.ConsensusFuture].StateProofInterval - 1
 	partkeyResponse, _, err := client.GenParticipationKeys(newAccount, partKeyFirstValid, partKeyLastValid, 1000)
 	a.NoError(err, "rest client should be able to add participation key to new account")
 	a.Equal(newAccount, partkeyResponse.Parent.String(), "partkey response should echo queried account")
@@ -308,11 +309,12 @@ func TestAccountGoesOnlineForShortPeriod(t *testing.T) {
 	fixture.AssertValidTxid(onlineTxID)
 	maxRoundsToWaitForTxnConfirm := uint64(5)
 	nodeStatus, err := client.Status()
+	a.NoError(err)
 	seededRound := nodeStatus.LastRound
 	fixture.WaitForTxnConfirmation(seededRound+maxRoundsToWaitForTxnConfirm, newAccount, onlineTxID)
 	nodeStatus, _ = client.Status()
 
-	accountStatus, err := client.AccountInformation(newAccount)
+	accountStatus, err := client.AccountInformationV2(newAccount, false)
 	a.NoError(err, "client should be able to get information about new account")
 	a.Equal(basics.Online.String(), accountStatus.Status, "new account should be online")
 }

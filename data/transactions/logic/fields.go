@@ -287,7 +287,7 @@ var txnFieldSpecs = [...]txnFieldSpec{
 	{XferAsset, StackUint64, false, 0, 5, false, "Asset ID"},
 	{AssetAmount, StackUint64, false, 0, 5, false, "value in Asset's units"},
 	{AssetSender, StackBytes, false, 0, 5, false,
-		"32 byte address. Moves asset from AssetSender if Sender is the Clawback address of the asset."},
+		"32 byte address. Source of assets if Sender is the Asset's Clawback address."},
 	{AssetReceiver, StackBytes, false, 0, 5, false, "32 byte address"},
 	{AssetCloseTo, StackBytes, false, 0, 5, false, "32 byte address"},
 	{GroupIndex, StackUint64, false, 0, 0, false,
@@ -344,7 +344,7 @@ var txnFieldSpecs = [...]txnFieldSpec{
 	{LastLog, StackBytes, false, 6, 0, true, "The last message emitted. Empty bytes if none were emitted"},
 
 	// Not an effect. Just added after the effects fields.
-	{StateProofPK, StackBytes, false, 6, 6, false, "64 byte state proof public key commitment"},
+	{StateProofPK, StackBytes, false, 6, 6, false, "64 byte state proof public key"},
 
 	// Pseudo-fields to aid access to large programs (bigger than TEAL values)
 	// reading in a txn seems not *super* useful, but setting in `itxn` is critical to inner app factories
@@ -1202,8 +1202,31 @@ const (
 	AcctBalance AcctParamsField = iota
 	// AcctMinBalance is algos needed for this accounts apps and assets
 	AcctMinBalance
-	//AcctAuthAddr is the rekeyed address if any, else ZeroAddress
+	// AcctAuthAddr is the rekeyed address if any, else ZeroAddress
 	AcctAuthAddr
+
+	// AcctTotalNumUint is the count of all uints from created global apps or opted in locals
+	AcctTotalNumUint
+	// AcctTotalNumByteSlice is the count of all byte slices from created global apps or opted in locals
+	AcctTotalNumByteSlice
+
+	// AcctTotalExtraAppPages is the extra code pages across all apps
+	AcctTotalExtraAppPages
+
+	// AcctTotalAppsCreated is the number of apps created by this account
+	AcctTotalAppsCreated
+	// AcctTotalAppsOptedIn is the number of apps opted in by this account
+	AcctTotalAppsOptedIn
+	// AcctTotalAssetsCreated is the number of ASAs created by this account
+	AcctTotalAssetsCreated
+	// AcctTotalAssets is the number of ASAs opted in by this account (always includes AcctTotalAssetsCreated)
+	AcctTotalAssets
+	// AcctTotalBoxes is the number of boxes created by the app this account is associated with
+	AcctTotalBoxes
+	// AcctTotalBoxBytes is the number of bytes in all boxes of this app account
+	AcctTotalBoxBytes
+
+	// AcctTotalAppSchema - consider how to expose
 
 	invalidAcctParamsField // compile-time constant for number of fields
 )
@@ -1235,8 +1258,18 @@ func (fs acctParamsFieldSpec) Note() string {
 
 var acctParamsFieldSpecs = [...]acctParamsFieldSpec{
 	{AcctBalance, StackUint64, 6, "Account balance in microalgos"},
-	{AcctMinBalance, StackUint64, 6, "Minimum required blance for account, in microalgos"},
+	{AcctMinBalance, StackUint64, 6, "Minimum required balance for account, in microalgos"},
 	{AcctAuthAddr, StackBytes, 6, "Address the account is rekeyed to."},
+
+	{AcctTotalNumUint, StackUint64, 8, "The total number of uint64 values allocated by this account in Global and Local States."},
+	{AcctTotalNumByteSlice, StackUint64, 8, "The total number of byte array values allocated by this account in Global and Local States."},
+	{AcctTotalExtraAppPages, StackUint64, 8, "The number of extra app code pages used by this account."},
+	{AcctTotalAppsCreated, StackUint64, 8, "The number of existing apps created by this account."},
+	{AcctTotalAppsOptedIn, StackUint64, 8, "The number of apps this account is opted into."},
+	{AcctTotalAssetsCreated, StackUint64, 8, "The number of existing ASAs created by this account."},
+	{AcctTotalAssets, StackUint64, 8, "The numbers of ASAs held by this account (including ASAs this account created)."},
+	{AcctTotalBoxes, StackUint64, boxVersion, "The number of existing boxes created by this account's app."},
+	{AcctTotalBoxBytes, StackUint64, boxVersion, "The total number of bytes used by this account's app's box keys and values."},
 }
 
 func acctParamsFieldSpecByField(f AcctParamsField) (acctParamsFieldSpec, bool) {

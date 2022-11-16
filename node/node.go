@@ -21,7 +21,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,7 +30,6 @@ import (
 	"github.com/algorand/go-algorand/agreement"
 	"github.com/algorand/go-algorand/agreement/gossip"
 	"github.com/algorand/go-algorand/catchup"
-	"github.com/algorand/go-algorand/compactcert"
 	"github.com/algorand/go-algorand/config"
 	"github.com/algorand/go-algorand/crypto"
 	"github.com/algorand/go-algorand/data"
@@ -50,6 +48,7 @@ import (
 	"github.com/algorand/go-algorand/node/indexer"
 	"github.com/algorand/go-algorand/protocol"
 	"github.com/algorand/go-algorand/rpcs"
+	"github.com/algorand/go-algorand/stateproof"
 	"github.com/algorand/go-algorand/util/db"
 	"github.com/algorand/go-algorand/util/execpool"
 	"github.com/algorand/go-algorand/util/metrics"
@@ -144,7 +143,7 @@ type AlgorandFullNode struct {
 
 	tracer messagetracer.MessageTracer
 
-	compactCert *compactcert.Worker
+	stateProofWorker *stateproof.Worker
 }
 
 // TxnWithStatus represents information about a single transaction,
@@ -298,23 +297,29 @@ func MakeFull(log logging.Logger, rootDir string, cfg config.Local, phonebookAdd
 		return nil, err
 	}
 	if catchpointCatchupState != ledger.CatchpointCatchupStateInactive {
-		node.catchpointCatchupService, err = catchup.MakeResumedCatchpointCatchupService(context.Background(), node, node.log, node.net, node.ledger.Ledger, node.config)
+		accessor := ledger.MakeCatchpointCatchupAccessor(node.ledger.Ledger, node.log)
+		node.catchpointCatchupService, err = catchup.MakeResumedCatchpointCatchupService(context.Background(), node, node.log, node.net, accessor, node.config)
 		if err != nil {
 			log.Errorf("unable to create catchpoint catchup service: %v", err)
 			return nil, err
 		}
+		node.log.Infof("resuming catchpoint catchup from state %d", catchpointCatchupState)
 	}
 
 	node.tracer = messagetracer.NewTracer(log).Init(cfg)
 	gossip.SetTrace(agreementParameters.Network, node.tracer)
 
-	compactCertPathname := filepath.Join(genesisDir, config.CompactCertFilename)
-	compactCertAccess, err := db.MakeAccessor(compactCertPathname, false, false)
+	// Delete the deprecated database file if it exists. This can be removed in future updates since this file should not exist by then.
+	oldCompactCertPath := filepath.Join(genesisDir, "compactcert.sqlite")
+	os.Remove(oldCompactCertPath)
+
+	stateProofPathname := filepath.Join(genesisDir, config.StateProofFileName)
+	stateProofAccess, err := db.MakeAccessor(stateProofPathname, false, false)
 	if err != nil {
-		log.Errorf("Cannot load compact cert data: %v", err)
+		log.Errorf("Cannot load state proof data: %v", err)
 		return nil, err
 	}
-	node.compactCert = compactcert.NewWorker(compactCertAccess, node.log, node.accountManager, node.ledger.Ledger, node.net, node)
+	node.stateProofWorker = stateproof.NewWorker(stateProofAccess, node.log, node.accountManager, node.ledger.Ledger, node.net, node)
 
 	return node, err
 }
@@ -353,7 +358,7 @@ func (node *AlgorandFullNode) Start() {
 		node.blockService.Start()
 		node.ledgerService.Start()
 		node.txHandler.Start()
-		node.compactCert.Start()
+		node.stateProofWorker.Start()
 		startNetwork()
 		// start indexer
 		if idx, err := node.Indexer(); err == nil {
@@ -380,8 +385,9 @@ func (node *AlgorandFullNode) startMonitoringRoutines() {
 	// Delete old participation keys
 	go node.oldKeyDeletionThread(node.ctx.Done())
 
-	// TODO re-enable with configuration flag post V1
-	//go logging.UsageLogThread(node.ctx, node.log, 100*time.Millisecond, nil)
+	if node.config.EnableUsageLog {
+		go logging.UsageLogThread(node.ctx, node.log, 100*time.Millisecond, nil)
+	}
 }
 
 // waitMonitoringRoutines waits for all the monitoring routines to exit. Note that
@@ -404,10 +410,8 @@ func (node *AlgorandFullNode) Stop() {
 	defer func() {
 		node.mu.Unlock()
 		node.waitMonitoringRoutines()
-		// we want to shut down the compactCert last, since the oldKeyDeletionThread might depend on it when making the
-		// call to LatestSigsFromThisNode.
-		node.compactCert.Shutdown()
-		node.compactCert = nil
+		node.stateProofWorker.Shutdown()
+		node.stateProofWorker = nil
 	}()
 
 	node.net.ClearHandlers()
@@ -497,7 +501,7 @@ func (node *AlgorandFullNode) broadcastSignedTxGroup(txgroup []transactions.Sign
 		return err
 	}
 
-	_, err = verify.TxnGroup(txgroup, b, node.ledger.VerifiedTransactionCache())
+	_, err = verify.TxnGroup(txgroup, b, node.ledger.VerifiedTransactionCache(), node.ledger)
 	if err != nil {
 		node.log.Warnf("malformed transaction: %v", err)
 		return err
@@ -898,7 +902,7 @@ func (node *AlgorandFullNode) InstallParticipationKey(partKeyBinary []byte) (acc
 func (node *AlgorandFullNode) loadParticipationKeys() error {
 	// Generate a list of all potential participation key files
 	genesisDir := filepath.Join(node.rootDir, node.genesisID)
-	files, err := ioutil.ReadDir(genesisDir)
+	files, err := os.ReadDir(genesisDir)
 	if err != nil {
 		return fmt.Errorf("AlgorandFullNode.loadPartitipationKeys: could not read directory %v: %v", genesisDir, err)
 	}
@@ -938,7 +942,7 @@ func (node *AlgorandFullNode) loadParticipationKeys() error {
 				renamedFileName := filepath.Join(fullname, ".old")
 				err = os.Rename(fullname, renamedFileName)
 				if err != nil {
-					node.log.Warn("loadParticipationKeys: failed to rename unsupported participation key file '%s' to '%s': %v", fullname, renamedFileName, err)
+					node.log.Warnf("loadParticipationKeys: failed to rename unsupported participation key file '%s' to '%s': %v", fullname, renamedFileName, err)
 				}
 			} else {
 				return fmt.Errorf("AlgorandFullNode.loadParticipationKeys: cannot load account at %v: %v", info.Name(), err)
@@ -981,7 +985,7 @@ func insertStateProofToRegistry(part account.PersistedParticipation, node *Algor
 
 }
 
-var txPoolGuage = metrics.MakeGauge(metrics.MetricName{Name: "algod_tx_pool_count", Description: "current number of available transactions in pool"})
+var txPoolGauge = metrics.MakeGauge(metrics.MetricName{Name: "algod_tx_pool_count", Description: "current number of available transactions in pool"})
 
 func (node *AlgorandFullNode) txPoolGaugeThread(done <-chan struct{}) {
 	defer node.monitoringRoutinesWaitGroup.Done()
@@ -990,7 +994,7 @@ func (node *AlgorandFullNode) txPoolGaugeThread(done <-chan struct{}) {
 	for true {
 		select {
 		case <-ticker.C:
-			txPoolGuage.Set(float64(node.transactionPool.PendingCount()), nil)
+			txPoolGauge.Set(float64(node.transactionPool.PendingCount()))
 		case <-done:
 			return
 		}
@@ -1033,8 +1037,6 @@ func (node *AlgorandFullNode) oldKeyDeletionThread(done <-chan struct{}) {
 
 		r := node.ledger.Latest()
 
-		// We need the latest header to determine the next compact cert
-		// round, if any.
 		latestHdr, err := node.ledger.BlockHdr(r)
 		if err != nil {
 			switch err.(type) {
@@ -1069,7 +1071,7 @@ func (node *AlgorandFullNode) oldKeyDeletionThread(done <-chan struct{}) {
 		// Persist participation registry updates to last-used round and voting key changes.
 		err = node.accountManager.Registry().Flush(participationRegistryFlushMaxWaitDuration)
 		if err != nil {
-			node.log.Warnf("error while flushing the registry: %w", err)
+			node.log.Warnf("error while flushing the registry: %v", err)
 		}
 	}
 }
@@ -1118,7 +1120,8 @@ func (node *AlgorandFullNode) StartCatchup(catchpoint string) error {
 		return MakeCatchpointUnableToStartError(stats.CatchpointLabel, catchpoint)
 	}
 	var err error
-	node.catchpointCatchupService, err = catchup.MakeNewCatchpointCatchupService(catchpoint, node, node.log, node.net, node.ledger.Ledger, node.config)
+	accessor := ledger.MakeCatchpointCatchupAccessor(node.ledger.Ledger, node.log)
+	node.catchpointCatchupService, err = catchup.MakeNewCatchpointCatchupService(catchpoint, node, node.log, node.net, accessor, node.config)
 	if err != nil {
 		node.log.Warnf("unable to create catchpoint catchup service : %v", err)
 		return err
@@ -1145,12 +1148,12 @@ func (node *AlgorandFullNode) AbortCatchup(catchpoint string) error {
 }
 
 // SetCatchpointCatchupMode change the node's operational mode from catchpoint catchup mode and back, it returns a
-// channel which contains the updated node context. This function need to work asyncronisly so that the caller could
-// detect and handle the usecase where the node is being shut down while we're switching to/from catchup mode without
+// channel which contains the updated node context. This function need to work asynchronously so that the caller could
+// detect and handle the use case where the node is being shut down while we're switching to/from catchup mode without
 // deadlocking on the shared node mutex.
 func (node *AlgorandFullNode) SetCatchpointCatchupMode(catchpointCatchupMode bool) (outCtxCh <-chan context.Context) {
 	// create a non-buffered channel to return the newly created context. The fact that it's non-buffered here
-	// is imporant, as it allows us to syncronize the "receiving" of the new context before canceling of the previous
+	// is important, as it allows us to synchronize the "receiving" of the new context before canceling of the previous
 	// one.
 	ctxCh := make(chan context.Context)
 	outCtxCh = ctxCh

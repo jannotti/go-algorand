@@ -242,7 +242,7 @@ The notation J,K indicates that two uint64 values J and K are interpreted as a u
 
 ## intcblock uint ...
 
-- Encoding: 0x20 {varuint length} [{varuint value}, ...]
+- Encoding: 0x20 {varuint count} [{varuint value}, ...]
 - Stack: ... &rarr; ...
 - prepare block of uint64 constants for use by intc
 
@@ -280,7 +280,7 @@ The notation J,K indicates that two uint64 values J and K are interpreted as a u
 
 ## bytecblock bytes ...
 
-- Encoding: 0x26 {varuint length} [({varuint value length} bytes), ...]
+- Encoding: 0x26 {varuint count} [({varuint value length} bytes), ...]
 - Stack: ... &rarr; ...
 - prepare block of byte-array constants for use by bytec
 
@@ -380,7 +380,7 @@ The notation J,K indicates that two uint64 values J and K are interpreted as a u
 | 16 | TypeEnum | uint64 |      | Transaction type as integer |
 | 17 | XferAsset | uint64 |      | Asset ID |
 | 18 | AssetAmount | uint64 |      | value in Asset's units |
-| 19 | AssetSender | []byte |      | 32 byte address. Moves asset from AssetSender if Sender is the Clawback address of the asset. |
+| 19 | AssetSender | []byte |      | 32 byte address. Source of assets if Sender is the Asset's Clawback address. |
 | 20 | AssetReceiver | []byte |      | 32 byte address |
 | 21 | AssetCloseTo | []byte |      | 32 byte address |
 | 22 | GroupIndex | uint64 |      | Position of this transaction within an atomic transaction group. A stand-alone transaction is implicitly element 0 in a group of 1 |
@@ -419,7 +419,7 @@ The notation J,K indicates that two uint64 values J and K are interpreted as a u
 | 60 | CreatedAssetID | uint64 | v5  | Asset ID allocated by the creation of an ASA (only with `itxn` in v5). Application mode only |
 | 61 | CreatedApplicationID | uint64 | v5  | ApplicationID allocated by the creation of an application (only with `itxn` in v5). Application mode only |
 | 62 | LastLog | []byte | v6  | The last message emitted. Empty bytes if none were emitted. Application mode only |
-| 63 | StateProofPK | []byte | v6  | 64 byte state proof public key commitment |
+| 63 | StateProofPK | []byte | v6  | 64 byte state proof public key |
 | 65 | NumApprovalProgramPages | uint64 | v7  | Number of Approval Program pages |
 | 67 | NumClearStateProgramPages | uint64 | v7  | Number of ClearState Program pages |
 
@@ -610,6 +610,27 @@ See `bnz` for details on how branches work. `b` always jumps to the offset.
 - immediately fail unless A is a non-zero number
 - Availability: v3
 
+## bury n
+
+- Encoding: 0x45 {uint8 depth}
+- Stack: ..., A &rarr; ...
+- replace the Nth value from the top of the stack with A. bury 0 fails.
+- Availability: v8
+
+## popn n
+
+- Encoding: 0x46 {uint8 stack depth}
+- Stack: ..., [N items] &rarr; ...
+- remove N values from the top of the stack
+- Availability: v8
+
+## dupn n
+
+- Encoding: 0x47 {uint8 copy count}
+- Stack: ..., A &rarr; ..., A, [N copies of A]
+- duplicate A, N times
+- Availability: v8
+
 ## pop
 
 - Encoding: 0x48
@@ -784,13 +805,15 @@ When A is a uint64, index 0 is the least significant bit. Setting bit 3 to 1 on 
 | 1 | StdEncoding |  |
 
 
-Decodes A using the base64 encoding E. Specify the encoding with an immediate arg either as URL and Filename Safe (`URLEncoding`) or Standard (`StdEncoding`). See <a href="https://rfc-editor.org/rfc/rfc4648.html#section-4">RFC 4648</a> (sections 4 and 5). It is assumed that the encoding ends with the exact number of `=` padding characters as required by the RFC. When padding occurs, any unused pad bits in the encoding must be set to zero or the decoding will fail. The special cases of `\n` and `\r` are allowed but completely ignored. An error will result when attempting to decode a string with a character that is not in the encoding alphabet or not one of `=`, `\r`, or `\n`.
+*Warning*: Usage should be restricted to very rare use cases. In almost all cases, smart contracts should directly handle non-encoded byte-strings.	This opcode should only be used in cases where base64 is the only available option, e.g. interoperability with a third-party that only signs base64 strings.
+
+ Decodes A using the base64 encoding E. Specify the encoding with an immediate arg either as URL and Filename Safe (`URLEncoding`) or Standard (`StdEncoding`). See [RFC 4648 sections 4 and 5](https://rfc-editor.org/rfc/rfc4648.html#section-4). It is assumed that the encoding ends with the exact number of `=` padding characters as required by the RFC. When padding occurs, any unused pad bits in the encoding must be set to zero or the decoding will fail. The special cases of `\n` and `\r` are allowed but completely ignored. An error will result when attempting to decode a string with a character that is not in the encoding alphabet or not one of `=`, `\r`, or `\n`.
 
 ## json_ref r
 
-- Encoding: 0x5f {string return type}
+- Encoding: 0x5f {uint8 return type}
 - Stack: ..., A: []byte, B: []byte &rarr; ..., any
-- return key B's value from a [valid](jsonspec.md) utf-8 encoded json object A
+- key B's value, of type R, from a [valid](jsonspec.md) utf-8 encoded json object A
 - **Cost**: 25 + 2 per 7 bytes of A
 - Availability: v7
 
@@ -803,13 +826,15 @@ Decodes A using the base64 encoding E. Specify the encoding with an immediate ar
 | 2 | JSONObject | []byte |  |
 
 
-specify the return type with an immediate arg either as JSONUint64 or JSONString or JSONObject.
+*Warning*: Usage should be restricted to very rare use cases, as JSON decoding is expensive and quite limited. In addition, JSON objects are large and not optimized for size.
+
+Almost all smart contracts should use simpler and smaller methods (such as the [ABI](https://arc.algorand.foundation/ARCs/arc-0004). This opcode should only be used in cases where JSON is only available option, e.g. when a third-party only signs JSON.
 
 ## balance
 
 - Encoding: 0x60
 - Stack: ..., A &rarr; ..., uint64
-- get balance for account A, in microalgos. The balance is observed after the effects of previous transactions in the group, and after the fee for the current transaction is deducted.
+- balance for account A, in microalgos. The balance is observed after the effects of previous transactions in the group, and after the fee for the current transaction is deducted. Changes caused by inner transactions are observable immediately following `itxn_submit`
 - Availability: v2
 - Mode: Application
 
@@ -988,18 +1013,27 @@ params: Txn.ForeignApps offset or an _available_ app id. Return: did_exist flag 
 
 `acct_params` Fields:
 
-| Index | Name | Type | Notes |
-| - | ------ | -- | --------- |
-| 0 | AcctBalance | uint64 | Account balance in microalgos |
-| 1 | AcctMinBalance | uint64 | Minimum required blance for account, in microalgos |
-| 2 | AcctAuthAddr | []byte | Address the account is rekeyed to. |
+| Index | Name | Type | In | Notes |
+| - | ------ | -- | - | --------- |
+| 0 | AcctBalance | uint64 |      | Account balance in microalgos |
+| 1 | AcctMinBalance | uint64 |      | Minimum required balance for account, in microalgos |
+| 2 | AcctAuthAddr | []byte |      | Address the account is rekeyed to. |
+| 3 | AcctTotalNumUint | uint64 | v8  | The total number of uint64 values allocated by this account in Global and Local States. |
+| 4 | AcctTotalNumByteSlice | uint64 | v8  | The total number of byte array values allocated by this account in Global and Local States. |
+| 5 | AcctTotalExtraAppPages | uint64 | v8  | The number of extra app code pages used by this account. |
+| 6 | AcctTotalAppsCreated | uint64 | v8  | The number of existing apps created by this account. |
+| 7 | AcctTotalAppsOptedIn | uint64 | v8  | The number of apps this account is opted into. |
+| 8 | AcctTotalAssetsCreated | uint64 | v8  | The number of existing ASAs created by this account. |
+| 9 | AcctTotalAssets | uint64 | v8  | The numbers of ASAs held by this account (including ASAs this account created). |
+| 10 | AcctTotalBoxes | uint64 | v8  | The number of existing boxes created by this account's app. |
+| 11 | AcctTotalBoxBytes | uint64 | v8  | The total number of bytes used by this account's app's box keys and values. |
 
 
 ## min_balance
 
 - Encoding: 0x78
 - Stack: ..., A &rarr; ..., uint64
-- get minimum required balance for account A, in microalgos. Required balance is affected by [ASA](https://developer.algorand.org/docs/features/asa/#assets-overview) and [App](https://developer.algorand.org/docs/features/asc1/stateful/#minimum-balance-requirement-for-a-smart-contract) usage. When creating or opting into an app, the minimum balance grows before the app code runs, therefore the increase is visible there. When deleting or closing out, the minimum balance decreases after the app executes.
+- minimum required balance for account A, in microalgos. Required balance is affected by ASA, App, and Box usage. When creating or opting into an app, the minimum balance grows before the app code runs, therefore the increase is visible there. When deleting or closing out, the minimum balance decreases after the app executes. Changes caused by inner transactions or box usage are observable immediately following the opcode effecting the change.
 - Availability: v3
 - Mode: Application
 
@@ -1023,6 +1057,24 @@ pushbytes args are not added to the bytecblock during assembly processes
 
 pushint args are not added to the intcblock during assembly processes
 
+## pushbytess bytes ...
+
+- Encoding: 0x82 {varuint count} [({varuint value length} bytes), ...]
+- Stack: ... &rarr; ..., [N items]
+- push sequences of immediate byte arrays to stack (first byte array being deepest)
+- Availability: v8
+
+pushbytess args are not added to the bytecblock during assembly processes
+
+## pushints uint ...
+
+- Encoding: 0x83 {varuint count} [{varuint value}, ...]
+- Stack: ... &rarr; ..., [N items]
+- push sequence of immediate uints to stack in the order they appear (first uint being deepest)
+- Availability: v8
+
+pushints args are not added to the intcblock during assembly processes
+
 ## ed25519verify_bare
 
 - Encoding: 0x84
@@ -1038,7 +1090,7 @@ pushint args are not added to the intcblock during assembly processes
 - branch unconditionally to TARGET, saving the next instruction on the call stack
 - Availability: v4
 
-The call stack is separate from the data stack. Only `callsub` and `retsub` manipulate it.
+The call stack is separate from the data stack. Only `callsub`, `retsub`, and `proto` manipulate it.
 
 ## retsub
 
@@ -1047,7 +1099,46 @@ The call stack is separate from the data stack. Only `callsub` and `retsub` mani
 - pop the top instruction from the call stack and branch to it
 - Availability: v4
 
-The call stack is separate from the data stack. Only `callsub` and `retsub` manipulate it.
+If the current frame was prepared by `proto A R`, `retsub` will remove the 'A' arguments from the stack, move the `R` return values down, and pop any stack locations above the relocated return values.
+
+## proto a r
+
+- Encoding: 0x8a {uint8 arguments} {uint8 return values}
+- Stack: ... &rarr; ...
+- Prepare top call frame for a retsub that will assume A args and R return values.
+- Availability: v8
+
+Fails unless the last instruction executed was a `callsub`.
+
+## frame_dig i
+
+- Encoding: 0x8b {int8 frame slot}
+- Stack: ... &rarr; ..., any
+- Nth (signed) value from the frame pointer.
+- Availability: v8
+
+## frame_bury i
+
+- Encoding: 0x8c {int8 frame slot}
+- Stack: ..., A &rarr; ...
+- replace the Nth (signed) value from the frame pointer in the stack with A
+- Availability: v8
+
+## switch target ...
+
+- Encoding: 0x8d {uint8 branch count} [{int16 branch offset, big-endian}, ...]
+- Stack: ..., A: uint64 &rarr; ...
+- branch to the Ath label. Continue at following instruction if index A exceeds the number of labels.
+- Availability: v8
+
+## match target ...
+
+- Encoding: 0x8e {uint8 branch count} [{int16 branch offset, big-endian}, ...]
+- Stack: ..., [A1, A2, ..., AN], B &rarr; ...
+- given match cases from A[1] to A[N], branch to the Ith label where A[I] = B. Continue to the following instruction if no matches are found.
+- Availability: v8
+
+`match` consumes N+1 values from the stack. Let the top stack value be B. The following N values represent an ordered list of match cases/constants (A), where the first value (A[0]) is the deepest in the stack. The immediate arguments are an ordered list of N labels (T). `match` will branch to target T[I], where A[I] = B. If there are no matches then execution continues on to the next instruction.
 
 ## shl
 
@@ -1120,9 +1211,39 @@ The notation A,B indicates that A and B are interpreted as a uint128 value, with
 - **Cost**: 130
 - Availability: v7
 
+## bn256_add
+
+- Encoding: 0x99
+- Stack: ..., A: []byte, B: []byte &rarr; ..., []byte
+- for (curve points A and B) return the curve point A + B
+- **Cost**: 70
+- Availability: v9
+
+A, B are curve points in G1 group. Each point consists of (X, Y) where X and Y are 256 bit integers, big-endian encoded. The encoded point is 64 bytes from concatenation of 32 byte X and 32 byte Y.
+
+## bn256_scalar_mul
+
+- Encoding: 0x9a
+- Stack: ..., A: []byte, B: []byte &rarr; ..., []byte
+- for (curve point A, scalar K) return the curve point KA
+- **Cost**: 970
+- Availability: v9
+
+A is a curve point in G1 Group and encoded as described in `bn256_add`. Scalar K is a big-endian encoded big integer that has no padding zeros.
+
+## bn256_pairing
+
+- Encoding: 0x9b
+- Stack: ..., A: []byte, B: []byte &rarr; ..., uint64
+- for (points in G1 group G1s, points in G2 group G2s), return whether they are paired => {0 or 1}
+- **Cost**: 8700
+- Availability: v9
+
+G1s are encoded by the concatenation of encoded G1 points, as described in `bn256_add`. G2s are encoded by the concatenation of encoded G2 points. Each G2 is in form (XA0+i*XA1, YA0+i*YA1) and encoded by big-endian field element XA0, XA1, YA0 and YA1 in sequence.
+
 ## b+
 
-- Encoding: 0xa0 through v6, 0xa0 0xa0 in v7 and on
+- Encoding: 0xa0 through v8, 0xa0 0xa0 in v9 and on
 - Stack: ..., A: []byte, B: []byte &rarr; ..., []byte
 - A plus B. A and B are interpreted as big-endian unsigned integers
 - **Cost**: 10
@@ -1130,7 +1251,7 @@ The notation A,B indicates that A and B are interpreted as a uint128 value, with
 
 ## b-
 
-- Encoding: 0xa1 through v6, 0xa0 0xa1 in v7 and on
+- Encoding: 0xa1 through v8, 0xa0 0xa1 in v9 and on
 - Stack: ..., A: []byte, B: []byte &rarr; ..., []byte
 - A minus B. A and B are interpreted as big-endian unsigned integers. Fail on underflow.
 - **Cost**: 10
@@ -1138,7 +1259,7 @@ The notation A,B indicates that A and B are interpreted as a uint128 value, with
 
 ## b/
 
-- Encoding: 0xa2 through v6, 0xa0 0xa2 in v7 and on
+- Encoding: 0xa2 through v8, 0xa0 0xa2 in v9 and on
 - Stack: ..., A: []byte, B: []byte &rarr; ..., []byte
 - A divided by B (truncated division). A and B are interpreted as big-endian unsigned integers. Fail if B is zero.
 - **Cost**: 20
@@ -1146,7 +1267,7 @@ The notation A,B indicates that A and B are interpreted as a uint128 value, with
 
 ## b*
 
-- Encoding: 0xa3 through v6, 0xa0 0xa3 in v7 and on
+- Encoding: 0xa3 through v8, 0xa0 0xa3 in v9 and on
 - Stack: ..., A: []byte, B: []byte &rarr; ..., []byte
 - A times B. A and B are interpreted as big-endian unsigned integers.
 - **Cost**: 20
@@ -1154,49 +1275,49 @@ The notation A,B indicates that A and B are interpreted as a uint128 value, with
 
 ## b<
 
-- Encoding: 0xa4 through v6, 0xa0 0xa4 in v7 and on
+- Encoding: 0xa4 through v8, 0xa0 0xa4 in v9 and on
 - Stack: ..., A: []byte, B: []byte &rarr; ..., uint64
 - 1 if A is less than B, else 0. A and B are interpreted as big-endian unsigned integers
 - Availability: v4
 
 ## b>
 
-- Encoding: 0xa5 through v6, 0xa0 0xa5 in v7 and on
+- Encoding: 0xa5 through v8, 0xa0 0xa5 in v9 and on
 - Stack: ..., A: []byte, B: []byte &rarr; ..., uint64
 - 1 if A is greater than B, else 0. A and B are interpreted as big-endian unsigned integers
 - Availability: v4
 
 ## b<=
 
-- Encoding: 0xa6 through v6, 0xa0 0xa6 in v7 and on
+- Encoding: 0xa6 through v8, 0xa0 0xa6 in v9 and on
 - Stack: ..., A: []byte, B: []byte &rarr; ..., uint64
 - 1 if A is less than or equal to B, else 0. A and B are interpreted as big-endian unsigned integers
 - Availability: v4
 
 ## b>=
 
-- Encoding: 0xa7 through v6, 0xa0 0xa7 in v7 and on
+- Encoding: 0xa7 through v8, 0xa0 0xa7 in v9 and on
 - Stack: ..., A: []byte, B: []byte &rarr; ..., uint64
 - 1 if A is greater than or equal to B, else 0. A and B are interpreted as big-endian unsigned integers
 - Availability: v4
 
 ## b==
 
-- Encoding: 0xa8 through v6, 0xa0 0xa8 in v7 and on
+- Encoding: 0xa8 through v8, 0xa0 0xa8 in v9 and on
 - Stack: ..., A: []byte, B: []byte &rarr; ..., uint64
 - 1 if A is equal to B, else 0. A and B are interpreted as big-endian unsigned integers
 - Availability: v4
 
 ## b!=
 
-- Encoding: 0xa9 through v6, 0xa0 0xa9 in v7 and on
+- Encoding: 0xa9 through v8, 0xa0 0xa9 in v9 and on
 - Stack: ..., A: []byte, B: []byte &rarr; ..., uint64
 - 0 if A is equal to B, else 1. A and B are interpreted as big-endian unsigned integers
 - Availability: v4
 
 ## b%
 
-- Encoding: 0xaa through v6, 0xa0 0xaa in v7 and on
+- Encoding: 0xaa through v8, 0xa0 0xaa in v9 and on
 - Stack: ..., A: []byte, B: []byte &rarr; ..., []byte
 - A modulo B. A and B are interpreted as big-endian unsigned integers. Fail if B is zero.
 - **Cost**: 20
@@ -1204,7 +1325,7 @@ The notation A,B indicates that A and B are interpreted as a uint128 value, with
 
 ## b|
 
-- Encoding: 0xab through v6, 0xa0 0xab in v7 and on
+- Encoding: 0xab through v8, 0xa0 0xab in v9 and on
 - Stack: ..., A: []byte, B: []byte &rarr; ..., []byte
 - A bitwise-or B. A and B are zero-left extended to the greater of their lengths
 - **Cost**: 6
@@ -1212,7 +1333,7 @@ The notation A,B indicates that A and B are interpreted as a uint128 value, with
 
 ## b&
 
-- Encoding: 0xac through v6, 0xa0 0xac in v7 and on
+- Encoding: 0xac through v8, 0xa0 0xac in v9 and on
 - Stack: ..., A: []byte, B: []byte &rarr; ..., []byte
 - A bitwise-and B. A and B are zero-left extended to the greater of their lengths
 - **Cost**: 6
@@ -1220,7 +1341,7 @@ The notation A,B indicates that A and B are interpreted as a uint128 value, with
 
 ## b^
 
-- Encoding: 0xad through v6, 0xa0 0xad in v7 and on
+- Encoding: 0xad through v8, 0xa0 0xad in v9 and on
 - Stack: ..., A: []byte, B: []byte &rarr; ..., []byte
 - A bitwise-xor B. A and B are zero-left extended to the greater of their lengths
 - **Cost**: 6
@@ -1228,7 +1349,7 @@ The notation A,B indicates that A and B are interpreted as a uint128 value, with
 
 ## b~
 
-- Encoding: 0xae through v6, 0xa0 0xae in v7 and on
+- Encoding: 0xae through v8, 0xa0 0xae in v9 and on
 - Stack: ..., A: []byte &rarr; ..., []byte
 - A with all bits inverted
 - **Cost**: 4
@@ -1236,7 +1357,7 @@ The notation A,B indicates that A and B are interpreted as a uint128 value, with
 
 ## bzero
 
-- Encoding: 0xaf through v6, 0xa0 0xaf in v7 and on
+- Encoding: 0xaf
 - Stack: ..., A: uint64 &rarr; ..., []byte
 - zero filled byte-array of length A
 - Availability: v4
@@ -1323,6 +1444,68 @@ The notation A,B indicates that A and B are interpreted as a uint128 value, with
 - Availability: v6
 - Mode: Application
 
+## box_create
+
+- Encoding: 0xb9
+- Stack: ..., A: []byte, B: uint64 &rarr; ..., uint64
+- create a box named A, of length B. Fail if A is empty or B exceeds 32,768. Returns 0 if A already existed, else 1
+- Availability: v8
+- Mode: Application
+
+Newly created boxes are filled with 0 bytes. `box_create` will fail if the referenced box already exists with a different size. Otherwise, existing boxes are unchanged by `box_create`.
+
+## box_extract
+
+- Encoding: 0xba
+- Stack: ..., A: []byte, B: uint64, C: uint64 &rarr; ..., []byte
+- read C bytes from box A, starting at offset B. Fail if A does not exist, or the byte range is outside A's size.
+- Availability: v8
+- Mode: Application
+
+## box_replace
+
+- Encoding: 0xbb
+- Stack: ..., A: []byte, B: uint64, C: []byte &rarr; ...
+- write byte-array C into box A, starting at offset B. Fail if A does not exist, or the byte range is outside A's size.
+- Availability: v8
+- Mode: Application
+
+## box_del
+
+- Encoding: 0xbc
+- Stack: ..., A: []byte &rarr; ..., uint64
+- delete box named A if it exists. Return 1 if A existed, 0 otherwise
+- Availability: v8
+- Mode: Application
+
+## box_len
+
+- Encoding: 0xbd
+- Stack: ..., A: []byte &rarr; ..., X: uint64, Y: uint64
+- X is the length of box A if A exists, else 0. Y is 1 if A exists, else 0.
+- Availability: v8
+- Mode: Application
+
+## box_get
+
+- Encoding: 0xbe
+- Stack: ..., A: []byte &rarr; ..., X: []byte, Y: uint64
+- X is the contents of box A if A exists, else ''. Y is 1 if A exists, else 0.
+- Availability: v8
+- Mode: Application
+
+For boxes that exceed 4,096 bytes, consider `box_create`, `box_extract`, and `box_replace`
+
+## box_put
+
+- Encoding: 0xbf
+- Stack: ..., A: []byte, B: []byte &rarr; ...
+- replaces the contents of box A with byte-array B. Fails if A exists and len(B) != len(box A). Creates A if it does not exist
+- Availability: v8
+- Mode: Application
+
+For boxes that exceed 4,096 bytes, consider `box_create`, `box_extract`, and `box_replace`
+
 ## txnas f
 
 - Encoding: 0xc0 {uint8 transaction field index}
@@ -1391,11 +1574,13 @@ The notation A,B indicates that A and B are interpreted as a uint128 value, with
 | 0 | VrfAlgorand |  |
 
 
+`VrfAlgorand` is the VRF used in Algorand. It is ECVRF-ED25519-SHA512-Elligator2, specified in the IETF internet draft [draft-irtf-cfrg-vrf-03](https://datatracker.ietf.org/doc/draft-irtf-cfrg-vrf/03/).
+
 ## block f
 
 - Encoding: 0xd1 {uint8 block field}
 - Stack: ..., A: uint64 &rarr; ..., any
-- field F of block A. Fail if A is not less than the current round or more than 1001 rounds before txn.LastValid.
+- field F of block A. Fail unless A falls between txn.LastValid-1002 and txn.FirstValid (exclusive)
 - Availability: v7
 
 `block` Fields:
