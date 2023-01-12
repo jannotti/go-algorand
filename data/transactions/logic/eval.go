@@ -33,6 +33,7 @@ import (
 	"math/bits"
 	"runtime"
 	"strings"
+	"sync"
 
 	"golang.org/x/crypto/sha3"
 
@@ -1348,10 +1349,19 @@ func opAddw(cx *EvalContext) error {
 	return nil
 }
 
+var bigIntPool = sync.Pool{
+	New: func() interface{} {
+		return new(big.Int)
+	},
+}
+
 func uint128(hi uint64, lo uint64) *big.Int {
-	whole := new(big.Int).SetUint64(hi)
+	whole := bigIntPool.Get().(*big.Int).SetUint64(hi)
 	whole.Lsh(whole, 64)
-	whole.Add(whole, new(big.Int).SetUint64(lo))
+	l := bigIntPool.Get().(*big.Int)
+	l.SetUint64(lo)
+	whole.Add(whole, l)
+	bigIntPool.Put(l)
 	return whole
 }
 
@@ -1359,10 +1369,20 @@ func opDivModwImpl(hiNum, loNum, hiDen, loDen uint64) (hiQuo uint64, loQuo uint6
 	dividend := uint128(hiNum, loNum)
 	divisor := uint128(hiDen, loDen)
 
-	quo, rem := new(big.Int).QuoRem(dividend, divisor, new(big.Int))
-	return new(big.Int).Rsh(quo, 64).Uint64(),
+	quo := bigIntPool.Get().(*big.Int)
+	rem := bigIntPool.Get().(*big.Int)
+	t := bigIntPool.Get().(*big.Int)
+	defer func() {
+		bigIntPool.Put(dividend)
+		bigIntPool.Put(divisor)
+		bigIntPool.Put(quo)
+		bigIntPool.Put(rem)
+		bigIntPool.Put(t)
+	}()
+	quo.QuoRem(dividend, divisor, rem)
+	return t.Rsh(quo, 64).Uint64(),
 		quo.Uint64(),
-		new(big.Int).Rsh(rem, 64).Uint64(),
+		t.Rsh(rem, 64).Uint64(),
 		rem.Uint64()
 }
 
@@ -1728,8 +1748,11 @@ func opExpwImpl(base uint64, exp uint64) (*big.Int, error) {
 		return &big.Int{}, fmt.Errorf("%d^%d overflow", base, exp)
 	}
 
-	answer := new(big.Int).SetUint64(base)
-	bigbase := new(big.Int).SetUint64(base)
+	answer := bigIntPool.Get().(*big.Int).SetUint64(base)
+	bigbase := bigIntPool.Get().(*big.Int).SetUint64(base)
+	defer func() {
+		bigIntPool.Put(bigbase)
+	}()
 	// safe to cast exp, because it is known to fit in int (it's < 128)
 	for i := 1; i < int(exp); i++ {
 		answer.Mul(answer, bigbase)
@@ -1750,8 +1773,11 @@ func opExpw(cx *EvalContext) error {
 	if err != nil {
 		return err
 	}
-	hi := new(big.Int).Rsh(val, 64).Uint64()
+	t := bigIntPool.Get().(*big.Int)
+	hi := t.Rsh(val, 64).Uint64()
 	lo := val.Uint64()
+	bigIntPool.Put(t)
+	bigIntPool.Put(val)
 
 	cx.stack[prev].Uint = hi
 	cx.stack[last].Uint = lo
@@ -1766,9 +1792,11 @@ func opBytesBinOp(cx *EvalContext, result *big.Int, op func(x, y *big.Int) *big.
 		return errors.New("math attempted on large byte-array")
 	}
 
-	rhs := new(big.Int).SetBytes(cx.stack[last].Bytes)
-	lhs := new(big.Int).SetBytes(cx.stack[prev].Bytes)
+	rhs := bigIntPool.Get().(*big.Int).SetBytes(cx.stack[last].Bytes)
+	lhs := bigIntPool.Get().(*big.Int).SetBytes(cx.stack[prev].Bytes)
 	op(lhs, rhs) // op's receiver has already been bound to result
+	bigIntPool.Put(rhs)
+	bigIntPool.Put(lhs)
 	if result.Sign() < 0 {
 		return errors.New("byte math would have negative result")
 	}
@@ -1778,26 +1806,31 @@ func opBytesBinOp(cx *EvalContext, result *big.Int, op func(x, y *big.Int) *big.
 }
 
 func opBytesPlus(cx *EvalContext) error {
-	result := new(big.Int)
-	return opBytesBinOp(cx, result, result.Add)
+	result := bigIntPool.Get().(*big.Int)
+	err := opBytesBinOp(cx, result, result.Add)
+	bigIntPool.Put(result)
+	return err
 }
 
 func opBytesMinus(cx *EvalContext) error {
-	result := new(big.Int)
-	return opBytesBinOp(cx, result, result.Sub)
+	result := bigIntPool.Get().(*big.Int)
+	err := opBytesBinOp(cx, result, result.Sub)
+	bigIntPool.Put(result)
+	return err
 }
 
 func opBytesDiv(cx *EvalContext) error {
-	result := new(big.Int)
+	result := bigIntPool.Get().(*big.Int)
 	var inner error
 	checkDiv := func(x, y *big.Int) *big.Int {
 		if y.BitLen() == 0 {
 			inner = errors.New("division by zero")
-			return new(big.Int)
+			return nil
 		}
 		return result.Div(x, y)
 	}
 	err := opBytesBinOp(cx, result, checkDiv)
+	bigIntPool.Put(result)
 	if err != nil {
 		return err
 	}
@@ -1805,8 +1838,10 @@ func opBytesDiv(cx *EvalContext) error {
 }
 
 func opBytesMul(cx *EvalContext) error {
-	result := new(big.Int)
-	return opBytesBinOp(cx, result, result.Mul)
+	result := bigIntPool.Get().(*big.Int)
+	err := opBytesBinOp(cx, result, result.Mul)
+	bigIntPool.Put(result)
+	return err
 }
 
 func opBytesSqrt(cx *EvalContext) error {
@@ -1816,8 +1851,9 @@ func opBytesSqrt(cx *EvalContext) error {
 		return errors.New("math attempted on large byte-array")
 	}
 
-	val := new(big.Int).SetBytes(cx.stack[last].Bytes)
+	val := bigIntPool.Get().(*big.Int).SetBytes(cx.stack[last].Bytes)
 	val.Sqrt(val)
+	bigIntPool.Put(val)
 	cx.stack[last].Bytes = val.Bytes()
 	return nil
 }
@@ -1894,16 +1930,17 @@ func opBytesNeq(cx *EvalContext) error {
 }
 
 func opBytesModulo(cx *EvalContext) error {
-	result := new(big.Int)
+	result := bigIntPool.Get().(*big.Int)
 	var inner error
 	checkMod := func(x, y *big.Int) *big.Int {
 		if y.BitLen() == 0 {
 			inner = errors.New("modulo by zero")
-			return new(big.Int)
+			return nil
 		}
 		return result.Mod(x, y)
 	}
 	err := opBytesBinOp(cx, result, checkMod)
+	bigIntPool.Put(result)
 	if err != nil {
 		return err
 	}
