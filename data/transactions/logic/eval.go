@@ -1277,10 +1277,6 @@ func (cx *EvalContext) ensureStackCap(targetCap int) {
 	}
 }
 
-func opDeprecated(cx *EvalContext) error {
-	return fmt.Errorf("deprecated opcode %d executed", cx.program[cx.pc])
-}
-
 func opErr(cx *EvalContext) error {
 	return errors.New("err opcode executed")
 }
