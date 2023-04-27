@@ -833,17 +833,17 @@ Almost all smart contracts should use simpler and smaller methods (such as the [
 ## balance
 
 - Opcode: 0x60
-- Stack: ..., A &rarr; ..., uint64
+- Stack: ..., A: []byte &rarr; ..., uint64
 - balance for account A, in microalgos. The balance is observed after the effects of previous transactions in the group, and after the fee for the current transaction is deducted. Changes caused by inner transactions are observable immediately following `itxn_submit`
 - Availability: v2
 - Mode: Application
 
-params: Txn.Accounts offset (or, since v4, an _available_ account address). Return: value.
+params: Txn.Accounts offset (or, since v4, an _available_ account address), _available_ application id (or, since v4, a Txn.ForeignApps offset). Return: value.
 
 ## app_opted_in
 
 - Opcode: 0x61
-- Stack: ..., A, B: uint64 &rarr; ..., uint64
+- Stack: ..., A: []byte, B: uint64 &rarr; ..., uint64
 - 1 if account A is opted in to application B, else 0
 - Availability: v2
 - Mode: Application
@@ -853,7 +853,7 @@ params: Txn.Accounts offset (or, since v4, an _available_ account address), _ava
 ## app_local_get
 
 - Opcode: 0x62
-- Stack: ..., A, B: []byte &rarr; ..., any
+- Stack: ..., A: []byte, B: []byte &rarr; ..., any
 - local state of the key B in the current application in account A
 - Availability: v2
 - Mode: Application
@@ -863,7 +863,7 @@ params: Txn.Accounts offset (or, since v4, an _available_ account address), stat
 ## app_local_get_ex
 
 - Opcode: 0x63
-- Stack: ..., A, B: uint64, C: []byte &rarr; ..., X: any, Y: uint64
+- Stack: ..., A: []byte, B: uint64, C: []byte &rarr; ..., X: any, Y: uint64
 - X is the local state of application B, key C in account A. Y is 1 if key existed, else 0
 - Availability: v2
 - Mode: Application
@@ -893,7 +893,7 @@ params: Txn.ForeignApps offset (or, since v4, an _available_ application id), st
 ## app_local_put
 
 - Opcode: 0x66
-- Stack: ..., A, B: []byte, C &rarr; ...
+- Stack: ..., A: []byte, B: []byte, C &rarr; ...
 - write C to key B in account A's local state of the current application
 - Availability: v2
 - Mode: Application
@@ -911,7 +911,7 @@ params: Txn.Accounts offset (or, since v4, an _available_ account address), stat
 ## app_local_del
 
 - Opcode: 0x68
-- Stack: ..., A, B: []byte &rarr; ...
+- Stack: ..., A: []byte, B: []byte &rarr; ...
 - delete key B from account A's local state of the current application
 - Availability: v2
 - Mode: Application
@@ -935,7 +935,7 @@ Deleting a key which is already absent has no effect on the application global s
 ## asset_holding_get f
 
 - Opcode: 0x70 {uint8 asset holding field index}
-- Stack: ..., A, B: uint64 &rarr; ..., X: any, Y: uint64
+- Stack: ..., A: []byte, B: uint64 &rarr; ..., X: any, Y: uint64
 - X is field F from account A's holding of asset B. Y is 1 if A is opted into B, else 0
 - Availability: v2
 - Mode: Application
@@ -1006,7 +1006,7 @@ params: Txn.ForeignApps offset or an _available_ app id. Return: did_exist flag 
 ## acct_params_get f
 
 - Opcode: 0x73 {uint8 account params field index}
-- Stack: ..., A &rarr; ..., X: any, Y: uint64
+- Stack: ..., A: []byte &rarr; ..., X: any, Y: uint64
 - X is field F from account A. Y is 1 if A owns positive algos, else 0
 - Availability: v6
 - Mode: Application
@@ -1032,12 +1032,12 @@ params: Txn.ForeignApps offset or an _available_ app id. Return: did_exist flag 
 ## min_balance
 
 - Opcode: 0x78
-- Stack: ..., A &rarr; ..., uint64
+- Stack: ..., A: []byte &rarr; ..., uint64
 - minimum required balance for account A, in microalgos. Required balance is affected by ASA, App, and Box usage. When creating or opting into an app, the minimum balance grows before the app code runs, therefore the increase is visible there. When deleting or closing out, the minimum balance decreases after the app executes. Changes caused by inner transactions or box usage are observable immediately following the opcode effecting the change.
 - Availability: v3
 - Mode: Application
 
-params: Txn.Accounts offset (or, since v4, an _available_ account address). Return: value.
+params: Txn.Accounts offset (or, since v4, an _available_ account address), _available_ application id (or, since v4, a Txn.ForeignApps offset). Return: value.
 
 ## pushbytes bytes
 
@@ -1560,82 +1560,3 @@ For boxes that exceed 4,096 bytes, consider `box_create`, `box_extract`, and `bo
 | 0 | BlkSeed | []byte |  |
 | 1 | BlkTimestamp | uint64 |  |
 
-
-## ec_add g
-
-- Opcode: 0xe0 {uint8 curve}
-- Stack: ..., A: []byte, B: []byte &rarr; ..., []byte
-- for curve points A and B, return the curve point A + B
-- **Cost**:  BN254g1=310 BN254g2=430 BLS12_381g1=540 BLS12_381g2=750
-- Availability: v9
-
-`EC` Groups:
-
-| Index | Name | Notes |
-| - | ------ | --------- |
-| 0 | BN254g1 | G1 of the BN254 curve. Points encoded as 32 byte X following by 32 byte Y |
-| 1 | BN254g2 | G2 of the BN254 curve. Points encoded as 64 byte X following by 64 byte Y |
-| 2 | BLS12_381g1 | G1 of the BLS 12-381 curve. Points encoded as 48 byte X following by 48 byte Y |
-| 3 | BLS12_381g2 | G2 of the BLS 12-381 curve. Points encoded as 96 byte X following by 48 byte Y |
-
-
-A and B are curve points in affine representation: field element X concatenated with field element Y. Field element `Z` is encoded as follows.
-For the base field elements (Fp), `Z` is encoded as a big-endian number and must be lower than the field modulus.
-For the quadratic field extension (Fp2), `Z` is encoded as the concatenation of the individual encoding of the coefficients. For an Fp2 element of the form `Z = Z0 + Z1 i`, where `i` is a formal quadratic non-residue, the encoding of Z is the concatenation of the encoding of `Z0` and `Z1` in this order. (`Z0` and `Z1` must be less than the field modulus).
-
-The point at infinity is encoded as `(X,Y) = (0,0)`.
-Groups G1 and G2 are denoted additively.
-
-Fails if A or B is not in G.
-A and/or B are allowed to be the point at infinity.
-Does _not_ check if A and B are in the main prime-order subgroup.
-
-## ec_scalar_mul g
-
-- Opcode: 0xe1 {uint8 curve}
-- Stack: ..., A: []byte, B: []byte &rarr; ..., []byte
-- for curve point A and scalar B, return the curve point BA, the point A multiplied by the scalar B.
-- **Cost**:  BN254g1=2200 BN254g2=4460 BLS12_381g1=3640 BLS12_381g2=8530
-- Availability: v9
-
-A is a curve point encoded and checked as described in `ec_add`. Scalar B is interpreted as a big-endian unsigned integer. Fails if B exceeds 32 bytes.
-
-## ec_pairing_check g
-
-- Opcode: 0xe2 {uint8 curve}
-- Stack: ..., A: []byte, B: []byte &rarr; ..., uint64
-- 1 if the product of the pairing of each point in A with its respective point in B is equal to the identity element of the target group Gt, else 0
-- **Cost**:  BN254g1=18000 BN254g2=18000 BLS12_381g1=15000 BLS12_381g2=15000
-- Availability: v9
-
-A and B are concatenated points, encoded and checked as described in `ec_add`. A contains points of the group G, B contains points of the associated group (G2 if G is G1, and vice versa). Fails if A and B have a different number of points, or if any point is not in its described group or outside the main prime-order subgroup - a stronger condition than other opcodes.
-
-## ec_multi_exp g
-
-- Opcode: 0xe3 {uint8 curve}
-- Stack: ..., A: []byte, B: []byte &rarr; ..., []byte
-- for curve points A and scalars B, return curve point B0A0 + B1A1 + B2A2 + ... + BnAn
-- **Cost**:  BN254g1=800 BN254g2=1800 BLS12_381g1=1400 BLS12_381g2=3500
-- Availability: v9
-
-A is a list of concatenated points, encoded and checked as described in `ec_add`. B is a list of concatenated scalars which, unlike ec_scalar_mul, must all be exactly 32 bytes long.
-The name `ec_multi_exp` was chosen to reflect common usage, but a more consistent name would be `ec_multi_scalar_mul`
-
-## ec_subgroup_check g
-
-- Opcode: 0xe4 {uint8 curve}
-- Stack: ..., A: []byte &rarr; ..., uint64
-- 1 if A is in the main prime-order subgroup of G (including the point at infinity) else 0. Program fails if A is not in G at all.
-- **Cost**:  BN254g1=50 BN254g2=11500 BLS12_381g1=5600 BLS12_381g2=7100
-- Availability: v9
-
-## ec_map_to g
-
-- Opcode: 0xe5 {uint8 curve}
-- Stack: ..., A: []byte &rarr; ..., []byte
-- maps field element A to group G
-- **Cost**:  BN254g1=1700 BN254g2=11000 BLS12_381g1=5600 BLS12_381g2=43000
-- Availability: v9
-
-BN254 points are mapped by the SVDW map. BLS12-381 points are mapped by the SSWU map.
-G1 element inputs are base field elements and G2 element inputs are quadratic field elements, with nearly the same encoding rules (for field elements) as defined in `ec_add`. There is one difference of encoding rule: G1 element inputs do not need to be 0-padded if they fit in less than 32 bytes for BN254 and less than 48 bytes for BLS12-381. (As usual, the empty byte array represents 0.) G2 elements inputs need to be always have the required size.
