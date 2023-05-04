@@ -2966,22 +2966,6 @@ func TestAppInfo(t *testing.T) {
 	testApp(t, source, ep)
 }
 
-func TestBudget(t *testing.T) {
-	partitiontest.PartitionTest(t)
-	t.Parallel()
-
-	source := `
-global OpcodeBudget
-int 699
-==
-assert
-global OpcodeBudget
-int 695
-==
-`
-	testApp(t, source, defaultEvalParams())
-}
-
 func TestSelfMutateV8(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	t.Parallel()

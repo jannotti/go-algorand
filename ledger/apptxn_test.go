@@ -2235,7 +2235,7 @@ func TestCreatedAppsAreAvailable(t *testing.T) {
 	l := newTestLedger(t, genBalances)
 	defer l.Close()
 
-	ops, err := logic.AssembleStringWithVersion("int 1\nint 1\nassert", logic.AssemblerMaxVersion)
+	ops, err := logic.AssembleStringWithVersion("int 1\nint 1\nassert", l.genesisProto.LogicSigVersion)
 	require.NoError(t, err)
 	program := "byte 0x" + hex.EncodeToString(ops.Program)
 
