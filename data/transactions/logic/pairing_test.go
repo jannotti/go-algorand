@@ -451,6 +451,36 @@ func BenchmarkBn254(b *testing.B) {
 
 }
 
+func BenchmarkFindMultiExpCutoff(b *testing.B) {
+	for i := 1; i < 15; i++ {
+		g1points := make([]bls12381.G1Affine, i)
+		for j := 0; j < i; j++ {
+			g1points[j] = bls12381RandomG1()
+		}
+		kbytes := make([]byte, i*scalarSize)
+		rand.Read(kbytes)
+
+		b.Run(fmt.Sprintf("small size=%02d", i), func(b *testing.B) {
+			for r := 0; r < b.N; r++ {
+				bls12381G1MultiExpSmall(g1points, kbytes)
+			}
+		})
+		b.Run(fmt.Sprintf("large size=%02d", i), func(b *testing.B) {
+			for r := 0; r < b.N; r++ {
+				bls12381G1MultiExpLarge(g1points, kbytes)
+			}
+		})
+	}
+}
+
+func BenchmarkBn254MultiExp(b *testing.B) {
+	if pairingVersion > LogicVersion {
+		b.Skip()
+	}
+	b.Run("BN254 g1", func(b *testing.B) {
+	})
+}
+
 func bn254RandomG1() bn254.G1Affine {
 	var fp bn254fp.Element
 	fp.SetRandom()
