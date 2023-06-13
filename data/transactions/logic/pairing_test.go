@@ -31,6 +31,7 @@ import (
 	"github.com/consensys/gnark-crypto/ecc/bn254"
 	bn254fp "github.com/consensys/gnark-crypto/ecc/bn254/fp"
 	bn254fr "github.com/consensys/gnark-crypto/ecc/bn254/fr"
+	"github.com/stretchr/testify/require"
 )
 
 const pairingNonsense = `
@@ -451,8 +452,36 @@ func BenchmarkBn254(b *testing.B) {
 
 }
 
+func requireBlsG1Eq(t *testing.T, g1points []bls12381.G1Affine, kbytes []byte) {
+	b1, err := bls12381G1MultiExpSmall(g1points, kbytes)
+	require.NoError(t, err)
+	b2, err := bls12381G1MultiExpLarge(g1points, kbytes)
+	require.NoError(t, err)
+	require.Equal(t, b1, b2)
+}
+
+func TestBlsG1LargeSmallEquivalent(t *testing.T) {
+	zero := [32]byte{}
+	for i := 1; i < 10; i++ {
+		g1points := make([]bls12381.G1Affine, i)
+		for j := 0; j < i; j++ {
+			g1points[j] = bls12381RandomG1()
+		}
+		kbytes := make([]byte, i*scalarSize)
+		rand.Read(kbytes)
+		requireBlsG1Eq(t, g1points, kbytes)
+		g1points[0] = bls12381.G1Affine{} // Infinity at 0
+		requireBlsG1Eq(t, g1points, kbytes)
+		g1points[0] = bls12381RandomG1()    // change back to random
+		g1points[i-1] = bls12381.G1Affine{} // Infinity at end
+		requireBlsG1Eq(t, g1points, kbytes)
+		copy(kbytes, zero[:]) // zero scalar
+		requireBlsG1Eq(t, g1points, kbytes)
+	}
+}
+
 func BenchmarkFindMultiExpCutoff(b *testing.B) {
-	for i := 1; i < 15; i++ {
+	for i := 1; i < 10; i++ {
 		g1points := make([]bls12381.G1Affine, i)
 		for j := 0; j < i; j++ {
 			g1points[j] = bls12381RandomG1()
