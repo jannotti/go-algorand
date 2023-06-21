@@ -3935,12 +3935,13 @@ func BenchmarkByteMath(b *testing.B) {
 	u128 := "byte 0x" + strings.Repeat(hex128, 1) + ";"
 	u256 := "byte 0x" + strings.Repeat(hex128, 2) + ";"
 	u512 := "byte 0x" + strings.Repeat(hex128, 4) + ";"
+	u128d := strings.Replace(u128, "20", "10", 1)
 
 	benches := [][]string{
 		{"bytec", u128 + "pop"},
 
 		{"b+ 128", u128 + u128 + "b+; pop"},
-		{"b- 128", u128 + u128 + "b-; pop"},
+		{"b- 128", u128 + u128d + "b-; pop"},
 		{"b* 128", u128 + u128 + "b*; pop"},
 		// half sized divisor seems pessimal for / and %
 		{"b/ 128", u128 + u64 + "b/; pop"},

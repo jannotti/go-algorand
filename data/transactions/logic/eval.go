@@ -29,6 +29,7 @@ import (
 	"math/bits"
 	"runtime"
 	"strings"
+	"sync"
 
 	"golang.org/x/exp/slices"
 
@@ -1661,22 +1662,87 @@ func opAddw(cx *EvalContext) error {
 	return nil
 }
 
+// We always use big.Ints for a short time (one opcode) and then return them to
+// the pool. It is a fool's errand to try to get big.Ints to be allocated on the
+// stack because even if you manage it, their internal slice of Words must have
+// a backing store that ends up allocated on the heap.
+var bigIntPool = sync.Pool{
+	New: func() interface{} {
+		return new(big.Int)
+	},
+}
+
+// exists for benchmarking
+const pool bool = true
+
+func getBig() *big.Int {
+	if pool {
+		return bigIntPool.Get().(*big.Int)
+	}
+	return new(big.Int)
+}
+func putBig(b *big.Int) {
+	if pool {
+		bigIntPool.Put(b)
+	}
+}
+
+// uint128 returns a big.Int constructed from the two uint64s supplied.
 func uint128(hi uint64, lo uint64) *big.Int {
-	whole := new(big.Int).SetUint64(hi)
+	// directly manipulate the words of the big.Int if they are uint64. big.Word
+	// is a `uint`, not `uint64`, so it might only be 32 bits. The words are
+	// LITTLE endian (lowest order bits are in words[0])
+	if bits.UintSize == 64 {
+		// this saves about 17% of the time in divmodw
+		b := getBig()
+		// reuse the existing Bits() slice to avoid allocation (it usually
+		// exists because this big.Int came from the pool)
+		words := append(b.Bits()[:0], big.Word(lo), big.Word(hi))
+		return b.SetBits(words)
+	}
+	// slowpath for non 64-bit systems
+	whole := getBig().SetUint64(hi)
 	whole.Lsh(whole, 64)
-	whole.Add(whole, new(big.Int).SetUint64(lo))
+	low := getBig().SetUint64(lo)
+	whole.Add(whole, low)
+	putBig(low)
 	return whole
+}
+
+// uint64s returns the high and low words of a big.Int. The big.Int MUST be no
+// larger than 128 bits.
+func uint64s(bi *big.Int) (hi uint64, lo uint64) {
+	// this is barely worth it. saves the cost of 1 opcode, roughly. But, since
+	// `uint128` has already peeked behind the big.Int curtain, why not?
+	if bits.UintSize == 64 {
+		words := bi.Bits()
+		if l := len(words); l > 0 {
+			lo = uint64(words[0])
+			if l > 1 {
+				hi = uint64(words[1])
+			}
+		}
+		return
+	}
+	// slowpath for non 64-bit systems
+	lo = bi.Uint64() // take lo first, so bi can be modified - avoid an allocation
+	hi = bi.Rsh(bi, 64).Uint64()
+	return
 }
 
 func opDivModwImpl(hiNum, loNum, hiDen, loDen uint64) (hiQuo uint64, loQuo uint64, hiRem uint64, loRem uint64) {
 	dividend := uint128(hiNum, loNum)
 	divisor := uint128(hiDen, loDen)
 
-	quo, rem := new(big.Int).QuoRem(dividend, divisor, new(big.Int))
-	return new(big.Int).Rsh(quo, 64).Uint64(),
-		quo.Uint64(),
-		new(big.Int).Rsh(rem, 64).Uint64(),
-		rem.Uint64()
+	quo, rem := getBig().QuoRem(dividend, divisor, getBig())
+	putBig(divisor)
+	putBig(dividend)
+
+	hiQuo, loQuo = uint64s(quo)
+	hiRem, loRem = uint64s(rem)
+	putBig(quo)
+	putBig(rem)
+	return
 }
 
 func opDivModw(cx *EvalContext) error {
@@ -2028,27 +2094,67 @@ func opExpwImpl(base uint64, exp uint64) (*big.Int, error) {
 	// These checks are slightly repetive but the clarity of
 	// avoiding nested checks seems worth it.
 	if exp == 0 && base == 0 {
-		return &big.Int{}, errors.New("0^0 is undefined")
+		return nil, errors.New("0^0 is undefined")
 	}
 	if base == 0 {
-		return &big.Int{}, nil
+		return getBig().SetUint64(0), nil
 	}
 	if exp == 0 || base == 1 {
-		return new(big.Int).SetUint64(1), nil
+		return getBig().SetUint64(1), nil
 	}
 	// base is now at least 2, so exp can not be 128
 	if exp >= 128 {
-		return &big.Int{}, fmt.Errorf("%d^%d overflow", base, exp)
+		return nil, fmt.Errorf("%d^%d overflow", base, exp)
 	}
 
-	answer := new(big.Int).SetUint64(base)
-	bigbase := new(big.Int).SetUint64(base)
+	answer := getBig().SetUint64(base)
+	bigbase := getBig().SetUint64(base)
 	// safe to cast exp, because it is known to fit in int (it's < 128)
 	for i := 1; i < int(exp); i++ {
 		answer.Mul(answer, bigbase)
 		if answer.BitLen() > 128 {
-			return &big.Int{}, fmt.Errorf("%d^%d overflow", base, exp)
+			return nil, fmt.Errorf("%d^%d overflow", base, exp)
 		}
+	}
+	putBig(bigbase)
+	return answer, nil
+}
+
+// opExpwImpl2 is not faster that opExpwImpl for our use cases, in which we are
+// not using particularly high powers. Leaving it here for now because it's
+// probably the right way to do this if we offer `expmod` which would allow
+// large exponents (the modular reduction prevents overflow).
+func opExpwImpl2(base uint64, exp uint64) (*big.Int, error) {
+	// These checks are slightly repetive but the clarity of
+	// avoiding nested checks seems worth it.
+	if exp == 0 && base == 0 {
+		return nil, errors.New("0^0 is undefined")
+	}
+	if base == 0 {
+		return getBig().SetUint64(0), nil
+	}
+	if exp == 0 || base == 1 {
+		return getBig().SetUint64(1), nil
+	}
+	// base is now at least 2, so exp can not be 128
+	if exp >= 128 {
+		return nil, fmt.Errorf("%d^%d overflow", base, exp)
+	}
+
+	// To prevent wasting time on a too big result, see if the answer is sure to have more than 128 bits
+	blen := uint64(bits.Len64(base)) // base is >= 2, so blen >= 2
+	minwidth := (blen-1)*exp + 1     // cannot wrap around, since 2 <= blen <= 64, and 1 <= exp < 128
+	if minwidth > 128 {
+		return nil, fmt.Errorf("%d^%d would require at least %d bits", base, exp, +1)
+	}
+
+	bigBase := getBig().SetUint64(base)
+	bigExp := getBig().SetUint64(exp)
+	answer := getBig().Exp(bigBase, bigExp, nil)
+	putBig(bigBase)
+	putBig(bigExp)
+	if answer.BitLen() > 128 {
+		return nil, fmt.Errorf("%d^%d overflow", base, exp)
 	}
 	return answer, nil
 }
@@ -2063,8 +2169,8 @@ func opExpw(cx *EvalContext) error {
 	if err != nil {
 		return err
 	}
-	hi := new(big.Int).Rsh(val, 64).Uint64()
-	lo := val.Uint64()
+	hi, lo := uint64s(val)
+	putBig(val)
 
 	cx.Stack[prev].Uint = hi
 	cx.Stack[last].Uint = lo
@@ -2079,9 +2185,11 @@ func opBytesBinOp(cx *EvalContext, result *big.Int, op func(x, y *big.Int) *big.
 		return errors.New("math attempted on large byte-array")
 	}
 
-	rhs := new(big.Int).SetBytes(cx.Stack[last].Bytes)
-	lhs := new(big.Int).SetBytes(cx.Stack[prev].Bytes)
+	rhs := getBig().SetBytes(cx.Stack[last].Bytes)
+	lhs := getBig().SetBytes(cx.Stack[prev].Bytes)
 	op(lhs, rhs) // op's receiver has already been bound to result
+	putBig(rhs)
+	putBig(lhs)
 	if result.Sign() < 0 {
 		return errors.New("byte math would have negative result")
 	}
@@ -2090,36 +2198,74 @@ func opBytesBinOp(cx *EvalContext, result *big.Int, op func(x, y *big.Int) *big.
 	return nil
 }
 
-func opBytesPlus(cx *EvalContext) error {
-	result := new(big.Int)
-	return opBytesBinOp(cx, result, result.Add)
-}
+func byteMathOperands(cx *EvalContext) (*big.Int, *big.Int, error) {
+	last := len(cx.Stack) - 1
+	prev := last - 1
 
-func opBytesMinus(cx *EvalContext) error {
-	result := new(big.Int)
-	return opBytesBinOp(cx, result, result.Sub)
-}
-
-func opBytesDiv(cx *EvalContext) error {
-	result := new(big.Int)
-	var inner error
-	checkDiv := func(x, y *big.Int) *big.Int {
-		if y.BitLen() == 0 {
-			inner = errors.New("division by zero")
-			return new(big.Int)
-		}
-		return result.Div(x, y)
+	if len(cx.Stack[last].Bytes) > maxByteMathSize || len(cx.Stack[prev].Bytes) > maxByteMathSize {
+		return nil, nil, errors.New("math attempted on large byte-array")
 	}
-	err := opBytesBinOp(cx, result, checkDiv)
+
+	rhs := getBig().SetBytes(cx.Stack[last].Bytes)
+	lhs := getBig().SetBytes(cx.Stack[prev].Bytes)
+	return lhs, rhs, nil
+}
+
+func byteMathResult(cx *EvalContext, result *big.Int) error {
+	last := len(cx.Stack) - 1
+	prev := last - 1
+	cx.Stack[prev].Bytes = result.Bytes()
+	putBig(result)
+	cx.Stack = cx.Stack[:last]
+	return nil
+}
+
+func opBytesPlus(cx *EvalContext) error {
+	lhs, rhs, err := byteMathOperands(cx)
 	if err != nil {
 		return err
 	}
-	return inner
+	lhs.Add(lhs, rhs)
+	putBig(rhs)
+	return byteMathResult(cx, lhs)
+}
+
+func opBytesMinus(cx *EvalContext) error {
+	lhs, rhs, err := byteMathOperands(cx)
+	if err != nil {
+		return err
+	}
+	lhs.Sub(lhs, rhs)
+	putBig(rhs)
+	if lhs.Sign() < 0 {
+		putBig(lhs)
+		return errors.New("byte math would have negative result")
+	}
+	return byteMathResult(cx, lhs)
+}
+
+func opBytesDiv(cx *EvalContext) error {
+	lhs, rhs, err := byteMathOperands(cx)
+	if err != nil {
+		return err
+	}
+	if rhs.BitLen() == 0 {
+		return errors.New("division by zero")
+	}
+	lhs.Div(lhs, rhs)
+	putBig(rhs)
+	return byteMathResult(cx, lhs)
 }
 
 func opBytesMul(cx *EvalContext) error {
-	result := new(big.Int)
-	return opBytesBinOp(cx, result, result.Mul)
+	lhs, rhs, err := byteMathOperands(cx)
+	if err != nil {
+		return err
+	}
+	result := getBig().Mul(lhs, rhs)
+	putBig(rhs)
+	putBig(lhs)
+	return byteMathResult(cx, result)
 }
 
 func opBytesSqrt(cx *EvalContext) error {
@@ -2129,9 +2275,12 @@ func opBytesSqrt(cx *EvalContext) error {
 		return errors.New("math attempted on large byte-array")
 	}
 
-	val := new(big.Int).SetBytes(cx.Stack[last].Bytes)
-	val.Sqrt(val)
+	val := getBig().SetBytes(cx.Stack[last].Bytes)
+	result := getBig()
+	result.Sqrt(val) // val.Sqrt(val) would cause internal allocation
+	putBig(result)
 	cx.Stack[last].Bytes = val.Bytes()
+	putBig(val)
 	return nil
 }
 
@@ -2214,20 +2363,18 @@ func opBytesNeq(cx *EvalContext) error {
 }
 
 func opBytesModulo(cx *EvalContext) error {
-	result := new(big.Int)
-	var inner error
-	checkMod := func(x, y *big.Int) *big.Int {
-		if y.BitLen() == 0 {
-			inner = errors.New("modulo by zero")
-			return new(big.Int)
-		}
-		return result.Mod(x, y)
-	}
-	err := opBytesBinOp(cx, result, checkMod)
+	lhs, rhs, err := byteMathOperands(cx)
 	if err != nil {
 		return err
 	}
-	return inner
+	if rhs.BitLen() == 0 {
+		return errors.New("modulo by zero")
+	}
+	result := getBig()
+	lhs.Mod(lhs, rhs)
+	putBig(rhs)
+	putBig(result)
+	return byteMathResult(cx, lhs)
 }
 
 func zpad(smaller []byte, size int) []byte {
