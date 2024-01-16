@@ -3822,10 +3822,8 @@ func BenchmarkUintMath(b *testing.B) {
 		{"mulw", "", "int 21276237623; int 32387238723; mulw; pop; pop", "int 1"},
 		{"div", "", "int 736247364; int 892; /; pop", "int 1"},
 		{"divw", "", "int 736; int 892; int 892; divw; pop", "int 1"},
-		{"divmodw", "", "int 736247364; int 892; int 126712; int 71672; divmodw; pop; pop; pop; pop", "int 1"},
 		{"sqrt", "", "int 736247364; sqrt; pop", "int 1"},
 		{"exp", "", "int 734; int 5; exp; pop", "int 1"},
-		{"expw", "", "int 734; int 10; expw; pop; pop", "int 1"},
 	}
 	for _, bench := range benches {
 		b.Run(bench[0], func(b *testing.B) {
@@ -3961,6 +3959,10 @@ func BenchmarkByteMath(b *testing.B) {
 		{"b/ 512", u512 + u256 + "b/; pop"},
 		{"b% 512", u512 + u256 + "b%; pop"},
 		{"bsqrt 512", u512 + "bsqrt; pop"},
+
+		// internally uses big.Int, so it makes sense to benchmark here
+		{"divmodw", "int 736247364; int 892; int 126712; int 71672; divmodw; pop; pop; pop; pop"},
+		{"expw", "int 734; int 10; expw; pop; pop"},
 
 		{"bytec recheck", u128 + "pop"},
 	}

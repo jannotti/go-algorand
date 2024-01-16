@@ -1695,8 +1695,8 @@ func uint128(hi uint64, lo uint64) *big.Int {
 	if bits.UintSize == 64 {
 		// this saves about 17% of the time in divmodw
 		b := getBig()
-		// reuse the existing Bits() slice to avoid allocation (it usually
-		// exists because this big.Int came from the pool)
+		// reuse the existing Bits() slice to avoid allocation (it's
+		// usually big enough because this big.Int came from the pool)
 		words := append(b.Bits()[:0], big.Word(lo), big.Word(hi))
 		return b.SetBits(words)
 	}
@@ -2177,27 +2177,6 @@ func opExpw(cx *EvalContext) error {
 	return nil
 }
 
-func opBytesBinOp(cx *EvalContext, result *big.Int, op func(x, y *big.Int) *big.Int) error {
-	last := len(cx.Stack) - 1
-	prev := last - 1
-
-	if len(cx.Stack[last].Bytes) > maxByteMathSize || len(cx.Stack[prev].Bytes) > maxByteMathSize {
-		return errors.New("math attempted on large byte-array")
-	}
-
-	rhs := getBig().SetBytes(cx.Stack[last].Bytes)
-	lhs := getBig().SetBytes(cx.Stack[prev].Bytes)
-	op(lhs, rhs) // op's receiver has already been bound to result
-	putBig(rhs)
-	putBig(lhs)
-	if result.Sign() < 0 {
-		return errors.New("byte math would have negative result")
-	}
-	cx.Stack[prev].Bytes = result.Bytes()
-	cx.Stack = cx.Stack[:last]
-	return nil
-}
-
 func byteMathOperands(cx *EvalContext) (*big.Int, *big.Int, error) {
 	last := len(cx.Stack) - 1
 	prev := last - 1
@@ -2262,7 +2241,7 @@ func opBytesMul(cx *EvalContext) error {
 	if err != nil {
 		return err
 	}
-	result := getBig().Mul(lhs, rhs)
+	result := getBig().Mul(lhs, rhs) // .Mul detects and allocates if receiver and operand alias
 	putBig(rhs)
 	putBig(lhs)
 	return byteMathResult(cx, result)
@@ -2278,9 +2257,9 @@ func opBytesSqrt(cx *EvalContext) error {
 	val := getBig().SetBytes(cx.Stack[last].Bytes)
 	result := getBig()
 	result.Sqrt(val) // val.Sqrt(val) would cause internal allocation
-	putBig(result)
-	cx.Stack[last].Bytes = val.Bytes()
 	putBig(val)
+	cx.Stack[last].Bytes = result.Bytes()
+	putBig(result)
 	return nil
 }
 
