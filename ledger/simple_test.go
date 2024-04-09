@@ -165,11 +165,11 @@ func endBlock(t testing.TB, ledger *Ledger, eval *eval.BlockEvaluator, proposer 
 	// can't call the agreement code, the eligibility of the prp is not
 	// considered.
 	if ledger.GenesisProto().Payouts.Enabled {
-		*gvb = ledgercore.MakeValidatedBlock(gvb.Block().WithProposer(committee.Seed(prp), prp, true), gvb.Delta())
+		*gvb = ledgercore.MakeValidatedBlock(gvb.Block().WithProposer(committee.Seed(prp), prp, true).Block(), gvb.Delta())
 	} else {
 		// To more closely mimic the agreement code, we don't
 		// write the proposer when !Payouts.Enabled.
-		*gvb = ledgercore.MakeValidatedBlock(gvb.Block().WithProposer(committee.Seed(prp), basics.Address{}, false), gvb.Delta())
+		*gvb = ledgercore.MakeValidatedBlock(gvb.Block().WithProposer(committee.Seed(prp), basics.Address{}, false).Block(), gvb.Delta())
 	}
 
 	vvb, err := validateWithoutSignatures(t, ledger, gvb.Block())
