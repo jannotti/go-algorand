@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync/atomic"
 
 	"github.com/algorand/avm-abi/apps"
@@ -48,24 +49,42 @@ type Ledger interface {
 
 // LoadedAccountDataEntry describes a loaded account.
 type LoadedAccountDataEntry struct {
-	Address *basics.Address
+	Address basics.Address
 	Data    *ledgercore.AccountData
 }
 
 // LoadedResourceEntry describes a loaded resource.
 type LoadedResourceEntry struct {
-	// Resource is the loaded Resource entry. unless address is nil, Resource would always contain a valid ledgercore.AccountResource pointer.
-	Resource *ledgercore.AccountResource
+	// Resource is the loaded Resource entry. If Address is non-nil, Resource
+	// will contain valid pointers to asset or app information.
+	Resource ledgercore.AccountResource
 	// Address might be empty if the resource does not exist. In that case creatableIndex and creatableType would still be valid while resource would be nil.
 	Address        *basics.Address
 	CreatableIndex basics.CreatableIndex
 	CreatableType  basics.CreatableType
 }
 
+func (e LoadedResourceEntry) String() string {
+	b := &strings.Builder{}
+	switch e.CreatableType {
+	case basics.AssetCreatable:
+		fmt.Fprintf(b, "{ asset(%d)", e.CreatableIndex)
+	case basics.AppCreatable:
+		fmt.Fprintf(b, "{ app(%d)", e.CreatableIndex)
+	default:
+		fmt.Fprintf(b, "{ ???(%d)", e.CreatableIndex)
+	}
+	if e.Address != nil {
+		fmt.Fprintf(b, " %s", *e.Address)
+	}
+	fmt.Fprintf(b, " }")
+	return b.String()
+}
+
 // LoadedKVEntry describes a loaded kv.
 type LoadedKVEntry struct {
 	Key   string
-	Value []byte
+	Value []byte // nil = KV does not exist
 }
 
 // LoadedTransactionGroup is a helper struct to allow asynchronous loading of the account data needed by the transaction groups
@@ -76,7 +95,7 @@ type LoadedTransactionGroup struct {
 	// Accounts is a list of all the Account balance records for the transaction group.
 	Accounts []LoadedAccountDataEntry
 
-	// Resources is the list of all Resources (apps/assets/hodling/locals) for the transaction group.
+	// Resources is the list of all Resources (apps/assets/holdings/locals) for the transaction group.
 	Resources []LoadedResourceEntry
 
 	// KVs is the list of all kvs for the transaction group
@@ -85,6 +104,11 @@ type LoadedTransactionGroup struct {
 	// Err indicates whether any of the balances in this structure have failed to load. In case of an error, at least
 	// one of the entries in the balances would be uninitialized.
 	Err error
+}
+
+func (e LoadedTransactionGroup) String() string {
+	return fmt.Sprintf("LoadedTransactionGroup{TxnGroup: %v, Accounts: %v, Resources: %v, KVs: %v, Err: %v}",
+		e.TxnGroup, e.Accounts, e.Resources, e.KVs, e.Err)
 }
 
 // paysetPrefetcher used to prefetch accounts balances and resources before the evaluator is called.
@@ -644,7 +668,7 @@ func (p *paysetPrefetcher) asyncPrefetchRoutine(queue *preloaderTaskQueue, taskI
 				continue
 			}
 			br := LoadedAccountDataEntry{
-				Address: task.address,
+				Address: *task.address,
 				Data:    &acctData,
 			}
 			task.groupTask.markCompletionAcct(task.groupTaskIndex, br, groupDoneCh)
@@ -677,21 +701,18 @@ func (p *paysetPrefetcher) asyncPrefetchRoutine(queue *preloaderTaskQueue, taskI
 				task.groupTask.markCompletionError(err, task, groupDoneCh)
 				continue
 			}
-			resource.AppParams = appResource.AppParams
-			resource.AppLocalState = appResource.AppLocalState
+			resource.AppResource = appResource
 		} else {
-			var assetResource ledgercore.AssetResource
 			assetResource, err := p.ledger.LookupAsset(p.rnd, *task.address, basics.AssetIndex(task.creatableIndex))
 			if err != nil {
 				// notify the channel of the error.
 				task.groupTask.markCompletionError(err, task, groupDoneCh)
 				continue
 			}
-			resource.AssetParams = assetResource.AssetParams
-			resource.AssetHolding = assetResource.AssetHolding
+			resource.AssetResource = assetResource
 		}
 		re := LoadedResourceEntry{
-			Resource:       &resource,
+			Resource:       resource,
 			Address:        task.address,
 			CreatableIndex: task.creatableIndex,
 			CreatableType:  task.creatableType,

@@ -586,13 +586,13 @@ func (l *Ledger) LookupAccount(round basics.Round, addr basics.Address) (data le
 // LookupApplication loads an application resource that matches the request parameters from the ledger.
 func (l *Ledger) LookupApplication(rnd basics.Round, addr basics.Address, aidx basics.AppIndex) (ledgercore.AppResource, error) {
 	r, err := l.lookupResource(rnd, addr, basics.CreatableIndex(aidx), basics.AppCreatable)
-	return ledgercore.AppResource{AppParams: r.AppParams, AppLocalState: r.AppLocalState}, err
+	return r.AppResource, err
 }
 
 // LookupAsset loads an asset resource that matches the request parameters from the ledger.
 func (l *Ledger) LookupAsset(rnd basics.Round, addr basics.Address, aidx basics.AssetIndex) (ledgercore.AssetResource, error) {
 	r, err := l.lookupResource(rnd, addr, basics.CreatableIndex(aidx), basics.AssetCreatable)
-	return ledgercore.AssetResource{AssetParams: r.AssetParams, AssetHolding: r.AssetHolding}, err
+	return r.AssetResource, err
 }
 
 // LookupAssets loads asset resources that match the request parameters from the ledger.

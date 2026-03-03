@@ -2114,8 +2114,8 @@ transactionGroupLoop:
 
 			if txgroup.Err == nil {
 				for _, br := range txgroup.Accounts {
-					if _, have := base.accounts[*br.Address]; !have {
-						base.accounts[*br.Address] = *br.Data
+					if _, have := base.accounts[br.Address]; !have {
+						base.accounts[br.Address] = *br.Data
 					}
 				}
 				for _, lr := range txgroup.Resources {

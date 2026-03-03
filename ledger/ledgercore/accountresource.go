@@ -22,10 +22,8 @@ import (
 
 // AccountResource used to retrieve a generic resource information from the data tier
 type AccountResource struct {
-	AssetParams   *basics.AssetParams
-	AssetHolding  *basics.AssetHolding
-	AppLocalState *basics.AppLocalState
-	AppParams     *basics.AppParams
+	AssetResource
+	AppResource
 }
 
 // AssetResource used to retrieve a generic asset resource information from the data tier

@@ -223,7 +223,7 @@ func parseLoadedAccountDataEntries(loadedAccountDataEntries []prefetcher.LoadedA
 
 	res := make(map[basics.Address]struct{})
 	for _, e := range loadedAccountDataEntries {
-		res[*e.Address] = struct{}{}
+		res[e.Address] = struct{}{}
 	}
 	return res
 }

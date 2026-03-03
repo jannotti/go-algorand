@@ -1825,10 +1825,10 @@ func TestAccountUnorderedUpdates(t *testing.T) {
 
 	// set a base state: fund couple accounts, create an app and opt-in
 	mock.setAccount(observer, ledgercore.AccountData{AccountBaseData: ledgercore.AccountBaseData{MicroAlgos: basics.MicroAlgos{Raw: 10000000}, TotalAppParams: 1}})
-	err := mock.setResource(observer, basics.CreatableIndex(aidx), ledgercore.AccountResource{AppParams: &basics.AppParams{ApprovalProgram: []byte{1, 2, 3}}})
+	err := mock.setResource(observer, basics.CreatableIndex(aidx), ledgercore.AccountResource{AppResource: ledgercore.AppResource{AppParams: &basics.AppParams{ApprovalProgram: []byte{1, 2, 3}}}})
 	a.NoError(err)
 	mock.setAccount(addr1, ledgercore.AccountData{AccountBaseData: ledgercore.AccountBaseData{MicroAlgos: basics.MicroAlgos{Raw: 10000000}, TotalAppLocalStates: 1}})
-	err = mock.setResource(addr1, basics.CreatableIndex(aidx), ledgercore.AccountResource{AppLocalState: &basics.AppLocalState{Schema: basics.StateSchema{NumUint: 10}}})
+	err = mock.setResource(addr1, basics.CreatableIndex(aidx), ledgercore.AccountResource{AppResource: ledgercore.AppResource{AppLocalState: &basics.AppLocalState{Schema: basics.StateSchema{NumUint: 10}}}})
 	a.NoError(err)
 
 	updates := make([]ledgercore.StateDelta, 4)
@@ -1922,10 +1922,10 @@ func TestAccountsNewRoundDeletedResourceEntries(t *testing.T) {
 
 	// set a base state: fund couple accounts, create an app and opt-in
 	mock.setAccount(observer, ledgercore.AccountData{AccountBaseData: ledgercore.AccountBaseData{MicroAlgos: basics.MicroAlgos{Raw: 10000000}, TotalAppParams: 1}})
-	err := mock.setResource(observer, basics.CreatableIndex(aidx), ledgercore.AccountResource{AppParams: &basics.AppParams{ApprovalProgram: []byte{1, 2, 3}}})
+	err := mock.setResource(observer, basics.CreatableIndex(aidx), ledgercore.AccountResource{AppResource: ledgercore.AppResource{AppParams: &basics.AppParams{ApprovalProgram: []byte{1, 2, 3}}}})
 	a.NoError(err)
 	mock.setAccount(addr1, ledgercore.AccountData{AccountBaseData: ledgercore.AccountBaseData{MicroAlgos: basics.MicroAlgos{Raw: 10000000}, TotalAppLocalStates: 1}})
-	err = mock.setResource(addr1, basics.CreatableIndex(aidx), ledgercore.AccountResource{AppLocalState: &basics.AppLocalState{Schema: basics.StateSchema{NumUint: 10}}})
+	err = mock.setResource(addr1, basics.CreatableIndex(aidx), ledgercore.AccountResource{AppResource: ledgercore.AppResource{AppLocalState: &basics.AppLocalState{Schema: basics.StateSchema{NumUint: 10}}}})
 	a.NoError(err)
 
 	updates := make([]ledgercore.StateDelta, 3)
