@@ -117,6 +117,9 @@ func (l *prefetcherAlignmentTestLedger) LookupWithoutRewards(_ basics.Round, add
 	if l.requestedBalances == nil {
 		l.requestedBalances = make(map[basics.Address]struct{})
 	}
+	if _, present := l.requestedBalances[addr]; present {
+		return ledgercore.AccountData{}, 0, fmt.Errorf("double request %s", addr)
+	}
 	l.requestedBalances[addr] = struct{}{}
 	l.mu.Unlock()
 
@@ -152,6 +155,10 @@ func (l *prefetcherAlignmentTestLedger) LookupApplication(rnd basics.Round, addr
 		c = make(map[basics.AppIndex]struct{})
 		l.requestedApps[addr] = c
 	}
+	if _, present := c[aidx]; present {
+		return ledgercore.AppResource{}, fmt.Errorf("double request app %d", aidx)
+	}
+
 	c[aidx] = struct{}{}
 	l.mu.Unlock()
 
@@ -168,6 +175,9 @@ func (l *prefetcherAlignmentTestLedger) LookupAsset(rnd basics.Round, addr basic
 		c = make(map[basics.AssetIndex]struct{})
 		l.requestedAssets[addr] = c
 	}
+	if _, present := c[aidx]; present {
+		return ledgercore.AssetResource{}, fmt.Errorf("double request asset %d", aidx)
+	}
 	c[aidx] = struct{}{}
 	l.mu.Unlock()
 
@@ -178,6 +188,9 @@ func (l *prefetcherAlignmentTestLedger) LookupKv(rnd basics.Round, key string) (
 	l.mu.Lock()
 	if l.requestedKvs == nil {
 		l.requestedKvs = make(map[string]struct{})
+	}
+	if _, present := l.requestedKvs[key]; present {
+		return nil, fmt.Errorf("double request %s", key)
 	}
 	l.requestedKvs[key] = struct{}{}
 	l.mu.Unlock()
@@ -366,6 +379,12 @@ func runEval(t *testing.T, l *prefetcherAlignmentTestLedger, txn transactions.Tr
 }
 
 func run(t *testing.T, l *prefetcherAlignmentTestLedger, txn transactions.Transaction) (ledgerData /*requested*/, ledgerData /*prefetched*/) {
+	l.requestedBalances = nil
+	l.requestedApps = nil
+	l.requestedAssets = nil
+	l.requestedCreators = nil
+	l.requestedKvs = nil
+
 	prefetched := prefetch(t, l, txn)
 
 	l.requestedBalances = nil

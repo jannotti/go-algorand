@@ -790,8 +790,9 @@ func StartEvaluator(l LedgerForEvaluator, hdr bookkeeping.BlockHeader, evalOpts 
 	}
 
 	poolAddr := eval.prevHeader.RewardsPool
-	// get the reward pool account data without any rewards
-	rewardsPoolData, _, err := l.LookupWithoutRewards(eval.prevHeader.Round, poolAddr)
+	// get the reward pool account data without any rewards, go through `base`
+	// so that it gets cached for later use in the block evaluation.
+	rewardsPoolData, err := base.lookup(poolAddr)
 	if err != nil {
 		return nil, err
 	}
