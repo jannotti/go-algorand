@@ -85,6 +85,8 @@ const varintBranchVersion = 13 // branch offsets encoded as binary.Varint instea
 // their version, and fixup TestAssemble() in assembler_test.go.
 const sumhashVersion = 13
 
+const poseidon2Version = 13
+
 // Unlimited Global Storage opcodes
 const boxVersion = 8 // box_*
 
@@ -669,7 +671,7 @@ var OpSpecs = []OpSpec{
 	{0x83, "pushints", opPushInts, proto(":", "", "[N items]").stackExplain(opPushIntsStackChange), 8, constants(asmPushInts, checkIntImmArgs, "uint ...", immInts).typed(typePushInts).trust()},
 
 	{0x84, "ed25519verify_bare", opEd25519VerifyBare, proto("bb{64}b{32}:T"), 7, costly(1900)},
-	{0x85, "falcon_verify", opFalconVerify, proto("bb{1232}b{1793}:T"), 12, costly(1700)}, // dynamic for internal hash?
+	{0x85, "falcon_verify", opFalconVerify, proto("bbb{1793}:T"), 12, costly(1700)},
 	{0x86, "sumhash512", opSumhash512, proto("b:b{64}"), sumhashVersion, costByLength(150, 7, 4, 0)},
 	{0x87, "sha512", opSHA512, proto("b:b{64}"), 13, costByLength(15, 32, 2, 0)},
 
@@ -824,6 +826,17 @@ var OpSpecs = []OpSpec{
 		BLS12_381Mp111: {
 			baseCost:  10,
 			chunkCost: 550,
+			chunkSize: 32,
+		}})},
+	{0xe7, "poseidon2", opPoseidon2, proto("b:b{32}"), poseidon2Version, costByFieldAndLength("c", &Poseidon2Configs, []linearCost{
+		BN254t2: {
+			baseCost:  7,
+			chunkCost: 350,
+			chunkSize: 32,
+		},
+		BLS12_381t2: {
+			baseCost:  7,
+			chunkCost: 350,
 			chunkSize: 32,
 		}})},
 }

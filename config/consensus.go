@@ -1517,7 +1517,7 @@ func initConsensusProtocols() {
 	vFuture.EnableLogicSigProgramSizePricing = true
 	vFuture.MaxLogicSigArgsSize = 1500
 	vFuture.MaxAbsoluteLogicSigProgramSize = vFuture.LogicSigMaxSize * uint64(vFuture.MaxTxGroupSize)
-	vFuture.PerByteTxnSurcharge = 100 // Each charged byte adds 0.000100 of MinTxnFee.
+	vFuture.PerByteTxnSurcharge = 100 // Each charged byte adds 0.000100 of min fee
 
 	Consensus[protocol.ConsensusFuture] = vFuture
 
