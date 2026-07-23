@@ -31,10 +31,9 @@ paths rather than `cd` where practical, matching the repo's conventions.
 
 ## Arguments
 
-An optional short description of what changed in go-algorand. If omitted, infer the
-change from the current branch's diff against `master` and from the conversation. Also
-use it (or the go-algorand branch name) to derive the `<slug>` for the SDK working
-branches created in Step 2.
+An optional short description of what changed in
+go-algorand. Otherwise proceed with all updates.  They should be
+idempotent.
 
 ## How the pieces fit together (read first)
 
@@ -66,25 +65,7 @@ Key facts about the generator:
   `go-algorand` (and, for indexer endpoints, in `../indexer/api/indexer.oas2.json`).
   This skill regenerates the *derived* artifacts, it does not invent endpoint specs.
 
-## Step 1: Classify the change
-
-From the branch diff, decide which paths were touched:
-
-```bash
-git diff --stat master... | cat
-```
-
-- REST/algod: `daemon/algod/api/algod.oas2.json`, `daemon/algod/api/server/v2/handlers.go`.
-- REST/kmd: `daemon/kmd/...`.
-- REST/indexer: lives in `../indexer` (spec `../indexer/api/indexer.oas2.json`).
-- Shared types: `data/transactions/...`, `data/basics/...`, `data/bookkeeping/block.go`,
-  `config/consensus.go`, `protocol/...` — cross-reference the export list in
-  `scripts/export_sdk_types.py` to see which of these it actually mirrors.
-
-State to the user which SDK-facing surfaces are in play; that set is exactly the SDKs to
-preflight in Step 2.
-
-## Step 2: Preflight — every target SDK exists, is current, and on a fresh branch
+## Step 1: Preflight — every target SDK exists, is current, and on a fresh branch
 
 The generator and the type-export script **write into** the SDK trees, and the generator
 is destructive (`find … -delete`). So before any generation, guarantee a clean, current
@@ -123,10 +104,10 @@ Note: `../generator` (Step 4) is a plain checkout that may carry local template 
 do **not** reset it. And `../go-algorand` stays on the branch that carries the change
 (Step 1); it is never reset to upstream.
 
-## Step 3: Regenerate the go-algorand (and indexer) API specs
+## Step 2: Regenerate the go-algorand (and indexer) API specs
 
-Only run the ones relevant to the change. These regenerate the derived specs/served
-code that the generator and the SDKs consume.
+These regenerate the derived specs/served code that the generator and
+the SDKs consume.
 
 ```bash
 # kmd swagger (generated FROM Go source; needs libsodium built)
@@ -144,7 +125,7 @@ Sanity-check the result: `git -C . diff --stat daemon/` and, if touched,
 `git -C ../indexer diff --stat`. The algod oas3 step calls out to a swagger converter
 service — if it fails offline, tell the user rather than pressing on with a stale spec.
 
-## Step 4: Ensure the generator is available
+## Step 3: Ensure the generator is available
 
 ```bash
 GEN=../generator
@@ -157,13 +138,13 @@ The generator is a Maven project. Its wrapper scripts run `mvn package` unless g
 `../generator/target/generator-*-jar-with-dependencies.jar` already exists and the
 generator repo is unchanged, `-s` is safe from the start.
 
-The generator is destructive — Step 2 already put each SDK on a clean branch from
-upstream, so it is safe to run. Still verify you are generating from the **go-algorand
+The generator is destructive — Step 1 already put each SDK on a clean branch from
+upstream, so it is safe to run. Verify you are generating from the **go-algorand
 branch that carries the change** (`git branch --show-current` here): the generator
 mirrors the *local* spec exactly, so generating from the wrong base silently
 adds/removes models.
 
-## Step 5: Go SDK (`../go-algorand-sdk`)
+## Step 4: Go SDK (`../go-algorand-sdk`)
 
 Two parts — do both if the change spans both surfaces.
 
@@ -205,7 +186,7 @@ make -C ../go-algorand-sdk lint    # client/v2 is lint-excluded
 make -C ../go-algorand-sdk unit    # unit + cucumber unit tags
 ```
 
-## Step 6: Java SDK (`../java-algorand-sdk`)
+## Step 5: Java SDK (`../java-algorand-sdk`)
 
 ```bash
 ../generator/scripts/generate_java.sh -s     # -s: reuse jar built in Step 5
@@ -219,7 +200,7 @@ Makefile test targets are `make -C ../java-algorand-sdk unit` / `integration`.
 Note: the Java **kmd** client (`.../kmd/client/`) is legacy swagger-codegen and is *not*
 regenerated here — a kmd API change needs a manual update (rare; flag it).
 
-## Step 7: JavaScript SDK (`../js-algorand-sdk`)
+## Step 6: JavaScript SDK (`../js-algorand-sdk`)
 
 ```bash
 ../generator/scripts/generate_typescript.sh -s
@@ -232,7 +213,7 @@ update automatically but a human must add the matching request class by hand (mi
 existing sibling file under `src/client/v2/algod/` or `.../indexer/`). Point this out
 and offer to draft it. Then build/test (`npm ci && npm run build`, per its README).
 
-## Step 8: Python SDK (`../py-algorand-sdk`) — manual
+## Step 7: Python SDK (`../py-algorand-sdk`) — manual
 
 No generator. Edit by hand, guided by the go-algorand diff:
 
@@ -243,7 +224,7 @@ No generator. Edit by hand, guided by the go-algorand diff:
 - Then `make -C ../py-algorand-sdk lint` and `make -C ../py-algorand-sdk generate-init`
   (the latter only refreshes `algosdk/__init__.pyi` stubs), plus its test target.
 
-## Step 9: Review
+## Step 8: Review
 
 For each SDK actually touched:
 
@@ -266,10 +247,7 @@ deletions).
 ## Notes
 
 - Do not commit or open PRs in any repo unless the user asks; leave working trees on the
-  Step 2 branches for review.
-- If the go-algorand change is already merged upstream, remind the user the nightly
-  codegen Actions will regenerate Go/Java/JS automatically — running locally is for
-  previewing or for unmerged work.
+  Step 1 branches for review.
 - `scripts/export_sdk_types.py` deliberately does **not** export a few types (e.g.
   `BoxRef`) that were reshaped in the SDK; don't "fix" those by adding them.
 - A new consensus parameter usually also needs a spec update — see the
