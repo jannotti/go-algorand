@@ -215,7 +215,8 @@ and offer to draft it. Then build/test (`npm ci && npm run build`, per its READM
 
 ## Step 7: Python SDK (`../py-algorand-sdk`) — manual
 
-No generator. Edit by hand, guided by the go-algorand diff:
+No generator. Edit by hand, guided by the changes generated in the
+other sdks:
 
 - New/changed endpoint → edit `algosdk/v2client/algod.py` or `indexer.py` (thin
   `requests` wrappers; mirror an adjacent method).
