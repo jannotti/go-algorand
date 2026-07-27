@@ -7,10 +7,10 @@ allowed-tools: [Bash, Read, Edit, Write, Grep, Glob]
 
 # Update the Algorand SDKs after a go-algorand change
 
-Take a change already made in `go-algorand` (a new/changed REST endpoint, a new
-transaction/block field, a new consensus parameter, or a new shared serialized type)
-and propagate it into the four sibling SDKs so their generated code and shared types
-match.
+Take changes that exist in `go-algorand` (REST endpoints,
+transaction/block fields, consensus parameters, or a new shared
+serialized type) and propagate it into the four sibling SDKs so their
+generated code and shared types match.
 
 This skill ships in the `go-algorand` repo and assumes it runs from that repo's root.
 It relies on the standard sibling layout (all checked out next to each other):
@@ -31,35 +31,37 @@ paths rather than `cd` where practical, matching the repo's conventions.
 
 ## Arguments
 
-An optional short description of what changed in
-go-algorand. Otherwise proceed with all updates.  They should be
-idempotent.
+An optional set of sdks to update, otherwise do all four.  The process
+described here should be idempotent, so do not try to decide which
+updates to perform.  Arguments may also restrict the update to only
+cover some aspects of the changes in go-algorand.
 
 ## How the pieces fit together (read first)
 
-There are **two independent kinds** of propagation, and a given change may need one or
-both. Classify the change before doing work:
+There are **two independent kinds** of propagation, changes may need
+one or both. Assume both unless told otherwise:
 
 1. **REST surface** — a change to the algod, indexer, or kmd HTTP API (new endpoint,
    new/changed request or response field, new model). This flows through the OpenAPI
    **specs** and the shared **`../generator`** tool.
 2. **Shared serialized types** — a change to a Go type whose msgpack/JSON encoding must
    match across implementations (transaction fields, block structure, consensus
-   params). For the **Go SDK only**, these are patched by
+   params). For the **Go SDK only**, these are pulled from go-algorand by
    `scripts/export_sdk_types.py`. The other SDKs pick these up through their own
-   generated models (REST surface) or hand-written code.
+   generated models (REST surface) or hand-written code.  There may be
+   times that the export script itself may need to be updated so that
+   a type can made available to the Go SDK that was not there before.
+   The goal is to minimize the need for cutting and pasting from
+   go-algorand, or worse, reproducing the same types by hand, which
+   often creates annoying long term name differences.
 
 Key facts about the generator:
 
 - **Go, Java, and JS** REST clients are produced by `../generator` (a Java/Maven +
   Velocity tool). Its `scripts/generate_{go,java,typescript}.sh` default to the sibling
   layout above and read the **local** `algod.oas2.json` / `indexer.oas2.json`, so they
-  reflect *unmerged* go-algorand changes.
+  reflect local go-algorand changes if any.
 - **Python has no generator** — `py-algorand-sdk` clients and models are hand-written.
-- Normally a **nightly GitHub Action** in each of the Go/Java/JS SDKs regenerates from
-  the upstream specs and opens a PR against the SDK's default branch. Running the
-  generator locally is how you preview or land a change before it merges. Say so to the
-  user if the change is already merged upstream and they might prefer the nightly PR.
 - The **oas2 (Swagger 2.0) JSON is the source of truth**. `algod.oas2.json` is
   hand-edited; if the change adds/alters an endpoint, that edit must already exist in
   `go-algorand` (and, for indexer endpoints, in `../indexer/api/indexer.oas2.json`).
@@ -100,9 +102,36 @@ For **each** target SDK (`go-algorand-sdk`, `java-algorand-sdk`, `js-algorand-sd
 Use one `<slug>` (from the argument or the go-algorand branch) for every SDK so the
 branches line up. Report the created branches to the user.
 
-Note: `../generator` (Step 4) is a plain checkout that may carry local template tweaks —
-do **not** reset it. And `../go-algorand` stays on the branch that carries the change
-(Step 1); it is never reset to upstream.
+Also preflight the **generator** (`../generator`) — it must contain
+**everything from `algorand/generator`**. Local additions are fine
+(there may be work in development there), so the requirement is only
+that HEAD is **not behind** the algorand remote — never reset it.
+
+```bash
+GEN=../generator
+# Find the remote that points at algorand/generator (origin here; upstream if forked)
+GREM=$(git -C "$GEN" remote -v | sed -n 's#\t.*algorand/generator.*(fetch)##p' | head -1)
+GDEF=$(git -C "$GEN" remote show "$GREM" | sed -n 's/.*HEAD branch: //p')   # master
+git -C "$GEN" fetch "$GREM"
+BEHIND=$(git -C "$GEN" rev-list --count "HEAD..$GREM/$GDEF")
+[ "$BEHIND" = 0 ] || echo "generator is $BEHIND commits behind $GREM/$GDEF — update it"
+```
+
+If it is behind, update it before generating (uncommitted local script tweaks are
+expected — stash, fast-forward, restore, reconciling any conflicts so upstream's
+functional fixes win while sibling-layout paths are preserved):
+
+```bash
+git -C "$GEN" stash push -m "local generator tweaks"      # if working tree dirty
+git -C "$GEN" merge --ff-only "$GREM/$GDEF"
+git -C "$GEN" stash pop                                    # resolve conflicts if any
+```
+
+Then rebuild the jar on the next `generate_*.sh` call (drop `-s`), since the update
+likely changed templates or the Java generator source.
+
+Note: `../go-algorand` stays on the branch that carries the change (Step 1); it is never
+reset to upstream.
 
 ## Step 2: Regenerate the go-algorand (and indexer) API specs
 
@@ -132,6 +161,9 @@ GEN=../generator
 [ -d "$GEN" ] || git clone git@github.com:algorand/generator.git "$GEN"
 ```
 
+Step 1 preflight already verified it is **not behind `algorand/generator`** and updated
+it if it was; do not skip that — a stale generator produces broken churn.
+
 The generator is a Maven project. Its wrapper scripts run `mvn package` unless given
 `-s`/`--skip-build`. Build it **once** this session (drop `-s` on the first
 `generate_*.sh` call); reuse the jar with `-s` on subsequent calls. If
@@ -146,7 +178,7 @@ adds/removes models.
 
 ## Step 4: Go SDK (`../go-algorand-sdk`)
 
-Two parts — do both if the change spans both surfaces.
+Two parts — do both unless instructed otehrwise
 
 **Shared types** (run from the go-algorand root; the script targets `../go-algorand-sdk`):
 
@@ -154,10 +186,13 @@ Two parts — do both if the change spans both surfaces.
 python3 scripts/export_sdk_types.py
 ```
 
-This extracts the exported types/vars/funcs and `gofmt`s them into the SDK's `types/`,
-`protocol/`, and `protocol/config/`. If the change added a brand-new type that should
-be mirrored, add an `export_type(...)` line to the script's `__main__` block first (see
-the existing entries), then re-run.
+This extracts the exported types/vars/funcs and `gofmt`s them into the
+SDK's `types/`, `protocol/`, and `protocol/config/`. If the change
+added a brand-new type that should be mirrored, add an
+`export_type(...)` line to the script's `__main__` block first (see
+the existing entries), then re-run.  This might occur if a new field
+is added to a transaction and that new field uses a new or previously
+unexported type.
 
 **REST clients** (run from the generator repo; defaults to the sibling specs/SDK):
 

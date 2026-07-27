@@ -259,6 +259,8 @@ if __name__ == "__main__":
     #   apps
     export_type("ApplicationCallTxnFields", "data/transactions/application.go", "applications")
     export_type("ResourceRef", "data/transactions/application.go", "applications")
+    #   heartbeats
+    export_type("HeartbeatTxnFields", "data/transactions/heartbeat.go", "heartbeat")
     # Don't export this, since it was greatly modified in the SDK. We'll just stick to the manual definition.
     # export_type("BoxRef", "data/transactions/application.go", "applications")
     export_type("HoldingRef", "data/transactions/application.go", "applications")
