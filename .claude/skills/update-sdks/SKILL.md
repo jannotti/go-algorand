@@ -94,13 +94,20 @@ For **each** target SDK (`go-algorand-sdk`, `java-algorand-sdk`, `js-algorand-sd
    user to stash/commit/discard — the generator would destroy uncommitted work.
 3. **Fetch upstream and branch fresh from its default branch:**
    ```bash
+   SLUG=$(date +%Y-%m-%d)                                                    # see below
    DEF=$(git -C <sdk> remote show upstream | sed -n 's/.*HEAD branch: //p')   # usually main
    git -C <sdk> fetch upstream
-   git -C <sdk> checkout -b sdk-update-<slug> "upstream/$DEF"
+   git -C <sdk> checkout -b "sdk-update-$SLUG" "upstream/$DEF"
    ```
 
-Use one `<slug>` (from the argument or the go-algorand branch) for every SDK so the
-branches line up. Report the created branches to the user.
+Use one `<slug>` for every SDK so the branches line up. Default to today's date
+(`date +%Y-%m-%d`, giving e.g. `sdk-update-2026-07-29`). An SDK update usually catches up
+with *everything* accumulated in go-algorand since the last sync — often run from `master`
+or a branch whose name describes unrelated work — so the current go-algorand branch name
+is a poor label for it. Only use a topical slug when the user supplies one in the
+arguments, or when they confirm the update really does carry a single identifiable change.
+Report the created branches to the user, and offer to rename if a better label emerges
+once the diff is in hand.
 
 Also preflight the **generator** (`../generator`) — it must contain
 **everything from `algorand/generator`**. Local additions are fine
