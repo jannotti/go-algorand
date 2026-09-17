@@ -515,6 +515,38 @@ byte base64 5rZMNsevs5sULO+54aN+OvU6lQ503z2X+SSYUABIx7E=
 	}
 }
 
+// TestAuthMsgAndDelegatedProgramHash checks what a signature program is told it
+// is approving. Without a delegator running, it is approving the transaction, so
+// AuthMsg is the transaction ID and there is no program being delegated to.
+func TestAuthMsgAndDelegatedProgramHash(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	var txn transactions.SignedTxn
+	txn.Txn.Type = protocol.PaymentTx
+	txn.Txn.Sender = basics.Address{1}
+
+	ep := defaultSigParams(txn)
+	txid := txn.ID()
+
+	testLogic(t, fmt.Sprintf("global AuthMsg; byte 0x%s; ==", hex.EncodeToString(txid[:])),
+		LogicVersion, ep)
+	testLogic(t, "global AuthMsg; txn TxID; ==", LogicVersion, ep)
+	testLogic(t, "global DelegatedProgramHash; global ZeroAddress; ==", LogicVersion, ep)
+
+	// Both are about a signature program's job, which an application never has.
+	testApp(t, "global AuthMsg; len; int 32; ==",
+		defaultAppParams(), "not allowed in current mode")
+	testApp(t, "global DelegatedProgramHash; len; int 32; ==",
+		defaultAppParams(), "not allowed in current mode")
+
+	// They arrived in v14, so an older program cannot ask.
+	testProg(t, "global AuthMsg; len; int 32; ==", lsigDelegationVersion-1,
+		exp(1, "global AuthMsg field was introduced in v14..."))
+	testProg(t, "global DelegatedProgramHash; len; int 32; ==", lsigDelegationVersion-1,
+		exp(1, "global DelegatedProgramHash field was introduced in v14..."))
+}
+
 // TestEvalSignatureProgramArgs checks that a signature program reads the
 // arguments it was evaluated with, rather than the ones on the transaction's
 // LogicSig. An ls-scheme PQSig carries a program and its arguments together,
@@ -1325,8 +1357,17 @@ const globalV12TestProgram = globalV11TestProgram + `
 const globalV13TestProgram = globalV12TestProgram + `
 `
 
-// v14 adds no new global fields.
+// v14 adds AuthMsg and DelegatedProgramHash, which are Signature mode only and
+// so are exercised by globalV14SigTestProgram rather than here.
 const globalV14TestProgram = globalV13TestProgram + `
+`
+
+// Signature mode only globals. Both answer questions about what the running
+// program is approving, which an application never is.
+const globalV14SigTestProgram = `
+global AuthMsg; len; int 32; ==; assert
+global DelegatedProgramHash; global ZeroAddress; ==; assert
+int 1
 `
 
 func TestAllGlobals(t *testing.T) {
@@ -1336,24 +1377,27 @@ func TestAllGlobals(t *testing.T) {
 	type desc struct {
 		lastField GlobalField
 		program   string
+		// sigProgram covers Signature mode only globals, which cannot appear in
+		// the application program above.
+		sigProgram string
 	}
 	// Associate the highest allowed global constant with each version's test program
 	tests := map[uint64]desc{
-		0:  {GroupSize, globalV1TestProgram},
-		1:  {GroupSize, globalV1TestProgram},
-		2:  {CurrentApplicationID, globalV2TestProgram},
-		3:  {CreatorAddress, globalV3TestProgram},
-		4:  {CreatorAddress, globalV4TestProgram},
-		5:  {GroupID, globalV5TestProgram},
-		6:  {CallerApplicationAddress, globalV6TestProgram},
-		7:  {CallerApplicationAddress, globalV7TestProgram},
-		8:  {CallerApplicationAddress, globalV8TestProgram},
-		9:  {CallerApplicationAddress, globalV9TestProgram},
-		10: {GenesisHash, globalV10TestProgram},
-		11: {PayoutsMaxBalance, globalV11TestProgram},
-		12: {PayoutsMaxBalance, globalV12TestProgram},
-		13: {PayoutsMaxBalance, globalV13TestProgram},
-		14: {PayoutsMaxBalance, globalV14TestProgram},
+		0:  {lastField: GroupSize, program: globalV1TestProgram},
+		1:  {lastField: GroupSize, program: globalV1TestProgram},
+		2:  {lastField: CurrentApplicationID, program: globalV2TestProgram},
+		3:  {lastField: CreatorAddress, program: globalV3TestProgram},
+		4:  {lastField: CreatorAddress, program: globalV4TestProgram},
+		5:  {lastField: GroupID, program: globalV5TestProgram},
+		6:  {lastField: CallerApplicationAddress, program: globalV6TestProgram},
+		7:  {lastField: CallerApplicationAddress, program: globalV7TestProgram},
+		8:  {lastField: CallerApplicationAddress, program: globalV8TestProgram},
+		9:  {lastField: CallerApplicationAddress, program: globalV9TestProgram},
+		10: {lastField: GenesisHash, program: globalV10TestProgram},
+		11: {lastField: PayoutsMaxBalance, program: globalV11TestProgram},
+		12: {lastField: PayoutsMaxBalance, program: globalV12TestProgram},
+		13: {lastField: PayoutsMaxBalance, program: globalV13TestProgram},
+		14: {lastField: DelegatedProgramHash, program: globalV14TestProgram, sigProgram: globalV14SigTestProgram},
 	}
 	// tests keys are versions so they must be in a range 1..AssemblerMaxVersion plus zero version
 	require.LessOrEqual(t, len(tests), AssemblerMaxVersion+1)
@@ -1370,7 +1414,7 @@ func TestAllGlobals(t *testing.T) {
 			last := tests[v].lastField
 			testProgram := tests[v].program
 			for _, globalField := range GlobalFieldNames[:last+1] {
-				if !strings.Contains(testProgram, globalField) {
+				if !strings.Contains(testProgram+tests[v].sigProgram, globalField) {
 					t.Errorf("TestGlobal missing field %v", globalField)
 				}
 			}
@@ -1384,6 +1428,10 @@ func TestAllGlobals(t *testing.T) {
 
 			ep := defaultAppParams(appcall)
 			testApp(t, tests[v].program, ep)
+
+			if tests[v].sigProgram != "" {
+				testLogic(t, tests[v].sigProgram, v, defaultSigParams())
+			}
 		})
 	}
 }

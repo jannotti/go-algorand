@@ -619,6 +619,12 @@ const (
 	// PayoutsMaxBalance is the maximum algo balance an account can have to receive block payouts (in the agreement round).
 	PayoutsMaxBalance
 
+	// AuthMsg is the message this program is being asked to approve
+	AuthMsg
+
+	// DelegatedProgramHash is the hash of the program this program is delegating to
+	DelegatedProgramHash
+
 	invalidGlobalField // compile-time constant for number of fields
 )
 
@@ -647,10 +653,12 @@ func (fs globalFieldSpec) Version() uint64 {
 }
 func (fs globalFieldSpec) Note() string {
 	note := fs.doc
-	if fs.mode == ModeApp {
+	switch fs.mode {
+	case ModeApp:
 		note = addExtra(note, "Application mode only.")
+	case ModeSig:
+		note = addExtra(note, "Signature mode only.")
 	}
-	// There are no Signature mode only globals
 	return note
 }
 
@@ -699,6 +707,10 @@ var globalFieldSpecs = [...]globalFieldSpec{
 		"The minimum balance an account must have in the agreement round to receive block payouts in the proposal round."},
 	{PayoutsMaxBalance, StackUint64, modeAny, incentiveVersion,
 		"The maximum balance an account can have in the agreement round to receive block payouts in the proposal round."},
+	{AuthMsg, StackBytes32, ModeSig, lsigDelegationVersion,
+		"The 32 byte message this program is being asked to approve: the hash of the program it is delegating to, or this transaction's ID when it is not delegating."},
+	{DelegatedProgramHash, StackBytes32, ModeSig, lsigDelegationVersion,
+		"The 32 byte hash of the program this program is delegating to, or 32 zero bytes when it is not delegating."},
 }
 
 func globalFieldSpecByField(f GlobalField) (globalFieldSpec, bool) {
