@@ -88,6 +88,10 @@ const foreignBoxVersion = 13 // app_params_set, foreign app box access
 const sumhashVersion = 14
 const f512Version = 14
 
+// lsigDelegationVersion is the first AVM version where a LogicSig account can
+// delegate a LogicSig, and so where a program can ask what it is approving.
+const lsigDelegationVersion = 14
+
 // LogicSigOffCurveVersion is the first AVM version where LogicSig programs
 // assembled by this package are expected to hash to an off-curve address.
 const LogicSigOffCurveVersion = 13

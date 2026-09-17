@@ -785,6 +785,11 @@ type EvalContext struct {
 	// is already correct.
 	argsRead [(transactions.EvalMaxArgs + 63) / 64]uint64
 
+	// delegated is the program this one is being asked to approve, set only
+	// while a delegator runs. Every other signature program is approving the
+	// transaction itself rather than another program, and leaves this nil.
+	delegated []byte
+
 	programHashCached crypto.Digest
 }
 
@@ -4129,6 +4134,25 @@ func (cx *EvalContext) globalFieldToValue(fs globalFieldSpec) (sv stackValue, er
 		sv.Uint = cx.Proto.Payouts.MinBalance
 	case PayoutsMaxBalance:
 		sv.Uint = cx.Proto.Payouts.MaxBalance
+	case AuthMsg:
+		// What this program is being asked to approve. A delegator approves a
+		// program; everything else approves the transaction it runs for. A
+		// program that checks a signature over this works in either role, which
+		// is what lets one program serve as an account and delegate from it.
+		if cx.delegated != nil {
+			msg := crypto.HashObj(PQDelegatedProgram{Addr: cx.txn.Authorizer(), Program: cx.delegated})
+			sv.Bytes = msg[:]
+		} else {
+			txid := cx.getTxID(&cx.txn.Txn, cx.groupIndex, false)
+			sv.Bytes = txid[:]
+		}
+	case DelegatedProgramHash:
+		if cx.delegated == nil {
+			sv.Bytes = make([]byte, crypto.DigestSize)
+			break
+		}
+		hash := HashProgram(cx.delegated)
+		sv.Bytes = hash[:]
 	default:
 		return sv, fmt.Errorf("invalid global field %s", fs.field)
 	}

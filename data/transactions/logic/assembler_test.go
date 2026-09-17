@@ -2125,6 +2125,8 @@ global PayoutsGoOnlineFee
 global PayoutsPercent
 global PayoutsMinBalance
 global PayoutsMaxBalance
+global AuthMsg
+global DelegatedProgramHash
 txn RejectVersion
 pushint 1
 block BlkBranch512
