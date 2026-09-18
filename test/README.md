@@ -51,4 +51,20 @@ To run a specific test, run e2e.sh with -i interactive flag, and follow the inst
 test/scripts/e2e.sh -i
 ```
 
+Or drive the runner yourself, which is quicker when iterating on one script. It
+needs `goal`, `algod` and `kmd` built from your branch, and a virtualenv with
+the Python SDK:
+```bash
+make install                 # puts binaries in $(go env GOPATH)/bin; `goal -v` prints the branch
+python3 -m venv /tmp/ve && /tmp/ve/bin/pip3 install 'py-algorand-sdk==2.*'
+
+PATH=$(go env GOPATH)/bin:$PATH /tmp/ve/bin/python3 \
+    ./test/scripts/e2e_client_runner.py --unsafe_scrypt \
+    ./test/scripts/e2e_subs/lsig-salted.sh ./test/scripts/e2e_subs/pq-falcon.sh
+```
+`--unsafe_scrypt` makes kmd much faster and is what CI uses. Each script brings
+up its own network and takes roughly half a minute. Pass `--keep-temps` to keep
+the network directory when a script fails, and note that `--version` defaults to
+`Future`, so vFuture features work without extra flags.
+
 Tests in the `e2e_subs/serial` directory are executed serially instead of in parallel. This should only be used when absolutely necessary.
