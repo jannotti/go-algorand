@@ -69,6 +69,20 @@ export TESTDIR=/tmp
 go test ./test/e2e-go/features/transactions -run TestAssetSend -v -timeout=0
 ```
 
+The shell scripts in `test/scripts/e2e_subs/` are a separate suite, run against a
+private network by `test/scripts/e2e_client_runner.py` rather than by `go test`.
+They can be run locally, one or several at a time, and take about half a minute
+each:
+```bash
+make install                                    # so goal/algod/kmd match your branch; check with `goal -v`
+python3 -m venv /tmp/ve && /tmp/ve/bin/pip3 install 'py-algorand-sdk==2.*'
+PATH=$(go env GOPATH)/bin:$PATH /tmp/ve/bin/python3 \
+    ./test/scripts/e2e_client_runner.py --unsafe_scrypt ./test/scripts/e2e_subs/SCRIPT.sh
+```
+`--unsafe_scrypt` makes kmd much faster, `--keep-temps` retains the network
+directory for debugging, and `--version` already defaults to `Future`, which is
+what vFuture features need. See `test/README.md` for the rest.
+
 ## Architecture Overview
 
 ### Main Binaries
