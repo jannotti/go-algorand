@@ -82,6 +82,48 @@ func TestAuthorizeWithProgram(t *testing.T) {
 	require.Equal(t, salted.PQsig, rekeyed.PQsig)
 }
 
+func TestAuthorizeWithDelegation(t *testing.T) {
+	partitiontest.PartitionTest(t)
+	t.Parallel()
+
+	delegated := transactions.LogicSig{
+		Logic: []byte{0x06, 0x81, 0x01}, // #pragma version 6; int 1
+		Args:  [][]byte{[]byte("delegated")},
+	}
+	delegator := transactions.LogicSig{
+		Logic: []byte{0x06, 0x81, 0x01, 0x22}, // a different program
+		Args:  [][]byte{[]byte("delegator")},
+	}
+	delegatorSalt, delegatorAddr := saltedProgramAuthorizer(delegator.Logic)
+
+	// The delegator is the account, so the transaction is authorized by the
+	// delegator's address rather than the delegated program's.
+	stxn := transactions.SignedTxn{Txn: transactions.Transaction{Header: transactions.Header{Sender: delegatorAddr}}}
+	authorizeWithDelegation(&stxn, delegated, delegator)
+
+	require.Equal(t, delegated.Logic, stxn.Lsig.Logic)
+	require.Equal(t, delegated.Args, stxn.Lsig.Args)
+	require.True(t, stxn.PQsig.Blank())
+
+	require.Equal(t, protocol.PQSchemeLogicSig, stxn.Lsig.PQsig.Scheme)
+	require.Equal(t, delegatorSalt, stxn.Lsig.PQsig.Salt)
+	require.Equal(t, delegator.Logic, stxn.Lsig.PQsig.PublicKey)
+
+	// Each program keeps its own arguments.
+	carried, err := stxn.Lsig.PQsig.Lsig()
+	require.NoError(t, err)
+	require.Equal(t, delegator.Args, [][]byte(carried.Args))
+
+	// Rekeying names the authorizer away from the sender, and that is the
+	// address the delegator has to match.
+	rekeyed := transactions.SignedTxn{
+		Txn:      transactions.Transaction{Header: transactions.Header{Sender: basics.Address{1}}},
+		AuthAddr: delegatorAddr,
+	}
+	authorizeWithDelegation(&rekeyed, delegated, delegator)
+	require.Equal(t, stxn.Lsig.PQsig, rekeyed.Lsig.PQsig)
+}
+
 func TestDeterminePathToSourceFromSourceMap(t *testing.T) {
 	partitiontest.PartitionTest(t)
 	t.Parallel()

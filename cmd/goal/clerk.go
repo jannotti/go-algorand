@@ -64,6 +64,9 @@ var (
 	skipPqAddressCheck bool
 	saltedProgram      bool
 
+	delegatorSource        string
+	delegatorArgB64Strings []string
+
 	noProgramOutput bool
 	writeSourceMap  bool
 	signProgram     bool
@@ -116,6 +119,8 @@ func init() {
 	sendCmd.Flags().StringVarP(&logicSigFile, "logic-sig", "L", "", "LogicSig to apply to transaction")
 	sendCmd.Flags().StringVar(&msigParams, "msig-params", "", "Multisig preimage parameters - [threshold] [Address 1] [Address 2] ...\nUsed to add the necessary fields in case the account was rekeyed to a multisig account")
 	sendCmd.Flags().BoolVar(&saltedProgram, "salted", false, "Authorize from the program's salted address, which no Ed25519 key can claim, rather than its program hash")
+	sendCmd.Flags().StringVar(&delegatorSource, "delegator", "", "Program source file of the LogicSig account delegating the logic this transaction is authorized by")
+	sendCmd.Flags().StringSliceVar(&delegatorArgB64Strings, "delegator-argb64", nil, "Base64 encoded args to pass to the delegating program")
 	sendCmd.MarkFlagRequired("to")
 	sendCmd.MarkFlagRequired("amount")
 
@@ -137,6 +142,8 @@ func init() {
 	signCmd.Flags().StringSliceVar(&argB64Strings, "argb64", nil, "Base64 encoded args to pass to transaction logic")
 	signCmd.Flags().StringVarP(&protoVersion, "proto", "P", "", "Consensus protocol version id string")
 	signCmd.Flags().BoolVar(&saltedProgram, "salted", false, "Authorize from the program's salted address, which no Ed25519 key can claim, rather than its program hash")
+	signCmd.Flags().StringVar(&delegatorSource, "delegator", "", "Program source file of the LogicSig account delegating the logic this transaction is authorized by")
+	signCmd.Flags().StringSliceVar(&delegatorArgB64Strings, "delegator-argb64", nil, "Base64 encoded args to pass to the delegating program")
 	signCmd.MarkFlagRequired("infile")
 	signCmd.MarkFlagRequired("outfile")
 
@@ -329,7 +336,7 @@ func programAuthorizer(program []byte, salted bool) basics.Address {
 // already matches, otherwise the legacy program hash, so that uses predating
 // the salted form keep the address they had.
 func authorizeWithProgram(stxn *transactions.SignedTxn, lsig transactions.LogicSig, salted bool) {
-	salt, addr := saltedProgramAuthorizer(lsig.Logic)
+	pqsig, addr := pqSigForProgram(lsig)
 	if !salted && stxn.Authorizer() == addr {
 		salted = true
 	}
@@ -338,15 +345,53 @@ func authorizeWithProgram(stxn *transactions.SignedTxn, lsig transactions.LogicS
 		return
 	}
 
-	if authorizer := stxn.Authorizer(); authorizer != addr {
-		reportErrorf("program authorizes %s, but the transaction is authorized by %s", addr, authorizer)
+	requireProgramAuthorizes(stxn, addr, "program")
+	stxn.PQsig = pqsig
+}
+
+// delegatingLogicSig returns the delegating program named by --delegator, and
+// whether one was named at all.
+func delegatingLogicSig() (transactions.LogicSig, bool) {
+	if delegatorSource == "" {
+		if len(delegatorArgB64Strings) > 0 {
+			reportErrorln("--delegator-argb64 has no program to pass arguments to without --delegator")
+		}
+		return transactions.LogicSig{}, false
 	}
-	stxn.PQsig = transactions.PQSig{
+	return transactions.LogicSig{
+		Logic: assembleFile(delegatorSource, false),
+		Args:  getB64Args(delegatorArgB64Strings),
+	}, true
+}
+
+// pqSigForProgram builds the ls-scheme PQSig carrying a program and its
+// arguments, and returns the address it authorizes from.
+func pqSigForProgram(lsig transactions.LogicSig) (transactions.PQSig, basics.Address) {
+	salt, addr := saltedProgramAuthorizer(lsig.Logic)
+	return transactions.PQSig{
 		Scheme:    protocol.PQSchemeLogicSig,
 		Salt:      salt,
 		PublicKey: lsig.Logic,
 		Signature: transactions.EncodeLogicSigArgs(lsig.Args),
+	}, addr
+}
+
+func requireProgramAuthorizes(stxn *transactions.SignedTxn, addr basics.Address, what string) {
+	if authorizer := stxn.Authorizer(); authorizer != addr {
+		reportErrorf("%s authorizes %s, but the transaction is authorized by %s", what, addr, authorizer)
 	}
+}
+
+// authorizeWithDelegation attaches a program together with the program
+// delegating it. The delegator is the account here, so it is the delegator's
+// address the transaction must be authorized by, and the delegated program
+// runs only if the delegator approves it.
+func authorizeWithDelegation(stxn *transactions.SignedTxn, lsig transactions.LogicSig, delegator transactions.LogicSig) {
+	pqsig, addr := pqSigForProgram(delegator)
+	requireProgramAuthorizes(stxn, addr, "delegating program")
+
+	stxn.Lsig = lsig
+	stxn.Lsig.PQsig = pqsig
 }
 
 func parseNoteField(cmd *cobra.Command) []byte {
@@ -424,6 +469,15 @@ var sendCmd = &cobra.Command{
 		} else if logicSigFile != "" {
 			lsigFromArgs(&lsig)
 		}
+		delegator, delegating := delegatingLogicSig()
+		if program != nil || lsig.Logic != nil {
+			if account == "" && delegating {
+				// The delegator is the account; the program below it is only
+				// what the delegator agreed to authorize with.
+				_, addr := saltedProgramAuthorizer(delegator.Logic)
+				account = addr.String()
+			}
+		}
 		if program != nil {
 			if account == "" {
 				account = programAuthorizer(program, saltedProgram).String()
@@ -496,7 +550,11 @@ var sendCmd = &cobra.Command{
 				Txn:      payment,
 				AuthAddr: authAddr,
 			}
-			authorizeWithProgram(&uncheckedTxn, lsig, saltedProgram)
+			if delegating {
+				authorizeWithDelegation(&uncheckedTxn, lsig, delegator)
+			} else {
+				authorizeWithProgram(&uncheckedTxn, lsig, saltedProgram)
+			}
 			blockHeader := bookkeeping.BlockHeader{
 				UpgradeState: bookkeeping.UpgradeState{
 					CurrentProtocol: proto,
@@ -515,10 +573,12 @@ var sendCmd = &cobra.Command{
 				Txn:      payment,
 				AuthAddr: authAddr,
 			}
-			authorizeWithProgram(&stx, transactions.LogicSig{
-				Logic: program,
-				Args:  programArgs,
-			}, saltedProgram)
+			programLsig := transactions.LogicSig{Logic: program, Args: programArgs}
+			if delegating {
+				authorizeWithDelegation(&stx, programLsig, delegator)
+			} else {
+				authorizeWithProgram(&stx, programLsig, saltedProgram)
+			}
 		} else {
 			signTx := sign || (outFilename == "")
 			if signerAddress != "" {
@@ -834,6 +894,10 @@ var signCmd = &cobra.Command{
 		} else if logicSigFile != "" {
 			lsigFromArgs(&lsig)
 		}
+		delegator, delegating := delegatingLogicSig()
+		if delegating && lsig.Logic == nil {
+			reportErrorln("--delegator needs a program to delegate, from --program/-p or --logic-sig/-L")
+		}
 		if lsig.Logic == nil {
 			// sign the usual way
 			dataDir := datadir.EnsureSingleDataDir()
@@ -899,7 +963,11 @@ var signCmd = &cobra.Command{
 						}
 						txn.AuthAddr = authAddr
 					}
-					authorizeWithProgram(txn, lsig, saltedProgram)
+					if delegating {
+						authorizeWithDelegation(txn, lsig, delegator)
+					} else {
+						authorizeWithProgram(txn, lsig, saltedProgram)
+					}
 				}
 				txnGroup = append(txnGroup, *txn)
 			}
