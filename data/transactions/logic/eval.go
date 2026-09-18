@@ -1414,6 +1414,18 @@ func EvalApp(program []byte, gi int, aid basics.AppIndex, params *EvalParams) (b
 // A program passes successfully if it finishes with one int element on the stack that is non-zero.
 // It returns EvalContext suitable for obtaining additional info about the execution.
 func EvalSignatureProgram(program []byte, args [][]byte, gi int, params *EvalParams) (bool, *EvalContext, error) {
+	return evalSignature(program, args, nil, gi, params)
+}
+
+// EvalDelegatingProgram evaluates program as a delegator: rather than approving
+// the ith transaction itself, it is being asked to approve delegated, the
+// program that will authorize the transaction if this one accepts. That is what
+// global AuthMsg and global DelegatedProgramHash report to it.
+func EvalDelegatingProgram(program []byte, args [][]byte, delegated []byte, gi int, params *EvalParams) (bool, *EvalContext, error) {
+	return evalSignature(program, args, delegated, gi, params)
+}
+
+func evalSignature(program []byte, args [][]byte, delegated []byte, gi int, params *EvalParams) (bool, *EvalContext, error) {
 	if params.SigLedger == nil {
 		return false, nil, errors.New("no sig ledger in signature eval")
 	}
@@ -1426,6 +1438,7 @@ func EvalSignatureProgram(program []byte, args [][]byte, gi int, params *EvalPar
 		groupIndex: gi,
 		txn:        &params.TxnGroup[gi],
 		sigArgs:    args,
+		delegated:  delegated,
 	}
 	// Save scratch. `gload*` opcodes are not currently allowed in ModeSig
 	// (though it seems we could allow them, with access to LogicSig scratch

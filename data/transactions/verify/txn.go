@@ -282,9 +282,13 @@ func logicSigGroupSizeCheck(stxs []transactions.SignedTxn, groupCtx *GroupContex
 			argsLen += lsig.ArgsLen()
 		}
 		// A program authorizing from an ls-scheme PQSig costs the group what one
-		// in a LogicSig costs. Malformed args are rejected here rather than
-		// counted, since there is no honest size to charge for them.
-		if pqsig := stxs[i].PQsig; pqsig.IsLogicSig() {
+		// in a LogicSig costs, whether it authorizes the transaction directly or
+		// delegates the LogicSig beside it. Malformed args are rejected here
+		// rather than counted, since there is no honest size to charge for them.
+		for _, pqsig := range []transactions.PQSig{stxs[i].PQsig, lsig.PQsig} {
+			if !pqsig.IsLogicSig() {
+				continue
+			}
 			pqLsig, err := pqsig.Lsig()
 			if err != nil {
 				return &TxGroupError{err: err, GroupIndex: i, Reason: TxGroupErrorReasonNotWellFormed}
@@ -508,6 +512,54 @@ func pqLogicSigSanityCheckPrep(gi int, groupCtx *GroupContext) (transactions.Log
 	return lsig, nil
 }
 
+// delegatorSanityCheckPrep checks the delegating LogicSig an ls-scheme PQSig
+// carries inside a LogicSig, as far as can be done without evaluating it, and
+// returns it. The delegator's address is the authorizer, exactly as it would be
+// were the delegator authorizing the transaction itself; what differs is that
+// it approves a program rather than a transaction.
+func delegatorSanityCheckPrep(gi int, groupCtx *GroupContext) (transactions.LogicSig, error) {
+	txn := &groupCtx.signedGroupTxns[gi]
+
+	if err := txn.Lsig.PQsig.ValidateEnvelope(groupCtx.consensusParams, txn.Authorizer()); err != nil {
+		return transactions.LogicSig{}, err
+	}
+
+	delegator, err := txn.Lsig.PQsig.Lsig()
+	if err != nil {
+		return transactions.LogicSig{}, err
+	}
+	if err := sigProgramSanityCheck(delegator.Logic, "delegating LogicSig", groupCtx); err != nil {
+		return transactions.LogicSig{}, err
+	}
+	return delegator, nil
+}
+
+// delegatorVerify evaluates the delegating program of a transaction whose
+// LogicSig is delegated by a LogicSig account. It runs before the delegated
+// program, and shares the group's opcode budget with it. Callers must have
+// sanity checked the transaction first, which is where the delegator's envelope
+// and program are validated; this only needs its arguments back.
+func delegatorVerify(gi int, groupCtx *GroupContext) error {
+	delegator, err := groupCtx.signedGroupTxns[gi].Lsig.PQsig.Lsig()
+	if err != nil {
+		return err
+	}
+
+	delegated := groupCtx.signedGroupTxns[gi].Lsig.Logic
+	pass, cx, err := logic.EvalDelegatingProgram(delegator.Logic, delegator.Args, delegated, gi, groupCtx.evalParams)
+	if err != nil {
+		logicErrTotal.Inc(nil)
+		return fmt.Errorf("transaction %v: delegating %w", groupCtx.signedGroupTxns[gi].ID(), err)
+	}
+	if !pass {
+		logicRejTotal.Inc(nil)
+		return fmt.Errorf("transaction %v: rejected by delegating logic", groupCtx.signedGroupTxns[gi].ID())
+	}
+	logicGoodTotal.Inc(nil)
+	logicCostTotal.AddUint64(uint64(cx.Cost()), nil)
+	return nil
+}
+
 // pqLogicSigVerify authorizes a transaction with an ls-scheme PQSig. The
 // address commits to the program, so once the envelope establishes that the
 // authorizer is that program's address, evaluating it is the whole
@@ -567,6 +619,12 @@ func logicSigSanityCheckBatchPrep(gi int, groupCtx *GroupContext, batch crypto.B
 	if numSigs > 1 {
 		return errors.New("LogicSig should have only one type of delegation signature")
 	}
+	if lsig.PQsig.IsLogicSig() {
+		// A LogicSig account delegating. Its program is checked here and
+		// evaluated in logicSigVerify, where the delegated program runs too.
+		_, err := delegatorSanityCheckPrep(gi, groupCtx)
+		return err
+	}
 	if !lsig.PQsig.Blank() {
 		// PQ schemes have no batch verification; verify in-place, like the top-level PQsig path.
 		program := logic.PQDelegatedProgram{Addr: txn.Authorizer(), Program: lsig.Logic}
@@ -616,6 +674,14 @@ func logicSigVerify(gi int, groupCtx *GroupContext) error {
 	err := LogicSigSanityCheck(gi, groupCtx)
 	if err != nil {
 		return err
+	}
+
+	// A delegating program approves the program below before it may authorize
+	// anything, and both draw on the group's one opcode budget.
+	if groupCtx.signedGroupTxns[gi].Lsig.PQsig.IsLogicSig() {
+		if err := delegatorVerify(gi, groupCtx); err != nil {
+			return err
+		}
 	}
 
 	return evalSigProgram(gi, groupCtx, groupCtx.signedGroupTxns[gi].Lsig)

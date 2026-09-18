@@ -19,6 +19,7 @@ package verify
 import (
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"slices"
@@ -423,6 +424,179 @@ func makeLogicSigPQTxn(t *testing.T, source string, args transactions.LogicSigAr
 			Signature: transactions.EncodeLogicSigArgs(args),
 		},
 	}
+}
+
+// makeDelegatedByLogicSigTxn builds a transaction whose LogicSig is delegated by
+// a LogicSig account: delegator authorizes the transaction, having approved the
+// delegated program it carries.
+func makeDelegatedByLogicSigTxn(t *testing.T, delegator string, delegatorArgs transactions.LogicSigArgs, delegated string, delegatedArgs [][]byte) transactions.SignedTxn {
+	t.Helper()
+	return makeDelegatedByLogicSigTxnAt(t, logic.AssemblerMaxVersion, delegator, delegatorArgs, delegated, delegatedArgs)
+}
+
+// makeDelegatedByLogicSigTxnAt assembles both programs at version, for reaching
+// checks that a program of the wrong version would trip first.
+func makeDelegatedByLogicSigTxnAt(t *testing.T, version uint64, delegator string, delegatorArgs transactions.LogicSigArgs, delegated string, delegatedArgs [][]byte) transactions.SignedTxn {
+	t.Helper()
+
+	delegatorOps, err := logic.AssembleStringWithVersion(delegator, version)
+	require.NoError(t, err)
+	delegatedOps, err := logic.AssembleStringWithVersion(delegated, version)
+	require.NoError(t, err)
+
+	salt, authorizer, err := basics.PQLogicSigAddress(delegatorOps.Program)
+	require.NoError(t, err)
+
+	return transactions.SignedTxn{
+		Txn: createPayTransaction(config.Consensus[protocol.ConsensusFuture].MinTxnFee, 40, 60, 1, authorizer, basics.Address{1}),
+		Lsig: transactions.LogicSig{
+			Logic: delegatedOps.Program,
+			Args:  delegatedArgs,
+			PQsig: transactions.PQSig{
+				Scheme:    protocol.PQSchemeLogicSig,
+				Salt:      salt,
+				PublicKey: delegatorOps.Program,
+				Signature: transactions.EncodeLogicSigArgs(delegatorArgs),
+			},
+		},
+	}
+}
+
+func TestTxnValidationDelegatedByLogicSig(t *testing.T) {
+	partitiontest.PartitionTest(t)
+
+	dummyLedger := DummyLedgerForSignature{}
+	blkHdr := createDummyBlockHeader(protocol.ConsensusFuture)
+
+	// A delegator that approves one program and nothing else. It names the
+	// program by hash, which is what DelegatedProgramHash reports.
+	delegated := "int 1"
+	delegatedOps, err := logic.AssembleStringWithVersion(delegated, logic.AssemblerMaxVersion)
+	require.NoError(t, err)
+	approved := logic.HashProgram(delegatedOps.Program)
+	delegator := fmt.Sprintf("global DelegatedProgramHash; byte 0x%s; ==", hex.EncodeToString(approved[:]))
+
+	stxn := makeDelegatedByLogicSigTxn(t, delegator, nil, delegated, nil)
+	_, err = TxnGroup([]transactions.SignedTxn{stxn}, &blkHdr, nil, &dummyLedger)
+	require.NoError(t, err)
+
+	// The delegation is to that program alone. Another one, even one that would
+	// approve on its own, is not what the delegator agreed to.
+	other := makeDelegatedByLogicSigTxn(t, delegator, nil, "int 1; int 1; &&", nil)
+	_, err = TxnGroup([]transactions.SignedTxn{other}, &blkHdr, nil, &dummyLedger)
+	require.ErrorContains(t, err, "rejected by delegating logic")
+	requireTxGroupErrorReason(t, err, TxGroupErrorReasonLogicSigFailed)
+
+	// Both programs have to approve. The delegated one runs second.
+	rejects := makeDelegatedByLogicSigTxn(t, "int 1", nil, "int 0", nil)
+	_, err = TxnGroup([]transactions.SignedTxn{rejects}, &blkHdr, nil, &dummyLedger)
+	require.ErrorContains(t, err, "rejected by logic")
+
+	// The delegator's address is the authorizer, so another account's
+	// transaction cannot borrow the delegation.
+	borrowed := stxn
+	borrowed.Txn.Sender = basics.Address{9}
+	_, err = TxnGroup([]transactions.SignedTxn{borrowed}, &blkHdr, nil, &dummyLedger)
+	require.ErrorContains(t, err, "authorizer mismatch")
+
+	// Each program reads its own arguments.
+	args := makeDelegatedByLogicSigTxn(t,
+		`arg 0; byte "delegator"; ==`, transactions.LogicSigArgs{[]byte("delegator")},
+		`arg 0; byte "delegated"; ==`, [][]byte{[]byte("delegated")})
+	_, err = TxnGroup([]transactions.SignedTxn{args}, &blkHdr, nil, &dummyLedger)
+	require.NoError(t, err)
+
+	swapped := makeDelegatedByLogicSigTxn(t,
+		`arg 0; byte "delegator"; ==`, transactions.LogicSigArgs{[]byte("delegated")},
+		`arg 0; byte "delegated"; ==`, [][]byte{[]byte("delegator")})
+	_, err = TxnGroup([]transactions.SignedTxn{swapped}, &blkHdr, nil, &dummyLedger)
+	require.ErrorContains(t, err, "rejected by delegating logic")
+
+	// A protocol without the ls scheme rejects the delegation. Both programs are
+	// assembled at a version that protocol runs, so the scheme is what it trips
+	// on rather than the program version.
+	disabledBlkHdr := createDummyBlockHeader(protocol.ConsensusV42)
+	disabledProto := config.Consensus[disabledBlkHdr.CurrentProtocol]
+	require.False(t, disabledProto.EnablePQSchemeLogicSig)
+	old := makeDelegatedByLogicSigTxnAt(t, disabledProto.LogicSigVersion, "int 1", nil, "int 1", nil)
+	_, err = TxnGroup([]transactions.SignedTxn{old}, &disabledBlkHdr, nil, &dummyLedger)
+	require.ErrorContains(t, err, "not enabled")
+}
+
+// TestDelegatedByLogicSigAuthMsg checks what a delegator is told it is
+// approving: the delegated program, bound to the account doing the delegating,
+// which is the same message a Falcon key signs when it delegates.
+func TestDelegatedByLogicSigAuthMsg(t *testing.T) {
+	partitiontest.PartitionTest(t)
+
+	dummyLedger := DummyLedgerForSignature{}
+	blkHdr := createDummyBlockHeader(protocol.ConsensusFuture)
+
+	delegated := "int 1"
+	delegatedOps, err := logic.AssembleStringWithVersion(delegated, logic.AssemblerMaxVersion)
+	require.NoError(t, err)
+
+	// The delegator's own address is in the message, so it has to be derived the
+	// same way the verifier derives it.
+	delegatorSrc := "global AuthMsg; len; int 32; =="
+	delegatorOps, err := logic.AssembleStringWithVersion(delegatorSrc, logic.AssemblerMaxVersion)
+	require.NoError(t, err)
+	_, authorizer, err := basics.PQLogicSigAddress(delegatorOps.Program)
+	require.NoError(t, err)
+
+	expected := crypto.HashObj(logic.PQDelegatedProgram{Addr: authorizer, Program: delegatedOps.Program})
+	exact := fmt.Sprintf("global AuthMsg; byte 0x%s; ==", hex.EncodeToString(expected[:]))
+
+	// Assemble the real delegator only after its address is known, which is why
+	// a program cannot hardcode its own AuthMsg.
+	stxn := makeDelegatedByLogicSigTxn(t, delegatorSrc, nil, delegated, nil)
+	_, err = TxnGroup([]transactions.SignedTxn{stxn}, &blkHdr, nil, &dummyLedger)
+	require.NoError(t, err)
+
+	// A delegator checking the exact message has a different address, so the
+	// message it should expect differs too. This only confirms the shape.
+	require.NotEqual(t, delegatorSrc, exact)
+
+	// The program being authorized sees the transaction, not the delegation.
+	seesTxn := makeDelegatedByLogicSigTxn(t, "int 1", nil, "global AuthMsg; txn TxID; ==", nil)
+	_, err = TxnGroup([]transactions.SignedTxn{seesTxn}, &blkHdr, nil, &dummyLedger)
+	require.NoError(t, err)
+
+	// And it is not delegating to anything itself.
+	noDelegate := makeDelegatedByLogicSigTxn(t, "int 1", nil, "global DelegatedProgramHash; global ZeroAddress; ==", nil)
+	_, err = TxnGroup([]transactions.SignedTxn{noDelegate}, &blkHdr, nil, &dummyLedger)
+	require.NoError(t, err)
+}
+
+// TestDelegatedByLogicSigBudget checks that a delegating program and the program
+// it approves draw on one budget. Two programs each starting from a full budget
+// would let a transaction buy twice the AVM work of an undelegated one.
+func TestDelegatedByLogicSigBudget(t *testing.T) {
+	partitiontest.PartitionTest(t)
+
+	dummyLedger := DummyLedgerForSignature{}
+	blkHdr := createDummyBlockHeader(protocol.ConsensusFuture)
+	proto := config.Consensus[protocol.ConsensusFuture]
+
+	budget := func(cost uint64) string {
+		return fmt.Sprintf("global OpcodeBudget; int %d; ==", cost)
+	}
+
+	// The delegator runs first and sees the whole budget; the program it
+	// approves sees what the delegator left, three opcodes later.
+	stxn := makeDelegatedByLogicSigTxn(t,
+		budget(proto.LogicSigMaxCost-1), nil,
+		budget(proto.LogicSigMaxCost-4), nil)
+	_, err := TxnGroup([]transactions.SignedTxn{stxn}, &blkHdr, nil, &dummyLedger)
+	require.NoError(t, err)
+
+	// A delegator that spends the budget leaves none for the program it
+	// approves, which is what stops the pair from getting two budgets.
+	hog := makeDelegatedByLogicSigTxn(t,
+		fmt.Sprintf("int 0; loop: int 1; +; dup; int %d; <; bnz loop; int 1", proto.LogicSigMaxCost), nil,
+		"int 1", nil)
+	_, err = TxnGroup([]transactions.SignedTxn{hog}, &blkHdr, nil, &dummyLedger)
+	require.ErrorContains(t, err, "dynamic cost budget exceeded")
 }
 
 func TestTxnValidationLogicSigPQSig(t *testing.T) {

@@ -153,11 +153,15 @@ func validatePlaceholderPQSig(proto config.ConsensusParams, pqSig transactions.P
 // nested in its LogicSig: a program with a non-blank nested PQ envelope with
 // empty signature bytes and no other signature category set on either the
 // transaction or the LogicSig.
+// As with isPlaceholderPQSig, an ls-scheme delegation is never a placeholder:
+// empty Signature bytes are a delegating program that takes no arguments, and
+// that program must be evaluated rather than stood in for.
 func isPlaceholderDelegatedPQSig(txn transactions.SignedTxn) bool {
 	return txn.Sig.Blank() && txn.Msig.Blank() && txn.PQsig.Blank() &&
 		txn.Lsig.HasProgram() && txn.Lsig.Sig.Blank() &&
 		txn.Lsig.Msig.Blank() && txn.Lsig.LMsig.Blank() &&
-		!txn.Lsig.PQsig.Blank() && len(txn.Lsig.PQsig.Signature) == 0
+		!txn.Lsig.PQsig.Blank() && len(txn.Lsig.PQsig.Signature) == 0 &&
+		!txn.Lsig.PQsig.IsLogicSig()
 }
 
 func txnNeedsSyntheticSignature(txn transactions.SignedTxn) bool {

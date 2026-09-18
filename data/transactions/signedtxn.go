@@ -195,10 +195,13 @@ func logicSigProgramFeeContribution(txgroup []SignedTxnWithAD, proto config.Cons
 	programBytes := 0
 	for _, txad := range txgroup {
 		programBytes += len(txad.SignedTxn.Lsig.Logic)
-		// An ls-scheme PQSig carries its program in place of a public key. Those
-		// bytes are priced like any other program's.
-		if pqsig := txad.SignedTxn.PQsig; pqsig.IsLogicSig() {
-			programBytes += len(pqsig.PublicKey)
+		// An ls-scheme PQSig carries its program in place of a public key,
+		// whether it authorizes the transaction or delegates the LogicSig beside
+		// it. Those bytes are priced like any other program's.
+		for _, pqsig := range []PQSig{txad.SignedTxn.PQsig, txad.SignedTxn.Lsig.PQsig} {
+			if pqsig.IsLogicSig() {
+				programBytes += len(pqsig.PublicKey)
+			}
 		}
 	}
 	freeProgramBytes := len(txgroup) * int(proto.LogicSigMaxSize)
