@@ -509,8 +509,10 @@ func (tracer *evalTracer) AfterProgram(cx *logic.EvalContext, pass bool, evalErr
 	groupIndex := cx.GroupIndex()
 
 	if cx.RunMode() == logic.ModeSig {
-		// Report cost for LogicSig program and exit
-		tracer.result.TxnGroups[0].Txns[groupIndex].LogicSigBudgetConsumed = cx.Cost()
+		// Report cost for LogicSig program and exit. A delegating program runs
+		// before the program it approves, and the two share one budget, so the
+		// cost accumulates rather than being reported alone.
+		tracer.result.TxnGroups[0].Txns[groupIndex].LogicSigBudgetConsumed += cx.Cost()
 		if tracer.result.ReturnTrace() {
 			tracer.result.TxnGroups[0].Txns[groupIndex].Trace.programTraceRef = nil
 		}
