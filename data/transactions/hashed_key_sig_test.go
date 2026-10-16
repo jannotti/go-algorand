@@ -54,6 +54,8 @@ func (f hashedKeySigTestFixture) protoWithSchemeDisabled(t *testing.T) config.Co
 		proto.EnableSigSchemeFalcon512 = false
 	case protocol.SigSchemeEd25519:
 		proto.EnableSigSchemeEd25519 = false
+	case protocol.SigSchemeLogicSig:
+		proto.EnableSigSchemeLogicSig = false
 	default:
 		t.Fatalf("unknown scheme %s", f.hsig.Scheme)
 	}
