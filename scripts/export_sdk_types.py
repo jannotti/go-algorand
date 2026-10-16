@@ -294,5 +294,5 @@ if __name__ == "__main__":
     export_type("AddressSalt", "data/basics/salted_address.go", "transaction")
 
     # Signature types
-    export_type("HashedKeySig", "data/transactions/hashed_key_sig.go", "signature")
-    export_func("(p HashedKeySig) Blank", "data/transactions/hashed_key_sig.go", "signature")
+    export_type("HashedKeySig", "data/transactions/hsig.go", "signature")
+    export_func("(p HashedKeySig) Blank", "data/transactions/hsig.go", "signature")
